@@ -14,9 +14,27 @@ import tempfile
 import shutil
 import uuid
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import base64
 import re
 from dotenv import load_dotenv
+
+
+def get_github_session():
+    """Create a requests session with retry logic for transient errors"""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
 
 load_dotenv()
 
@@ -45,20 +63,38 @@ def parse_repo_url(repo_url):
 
 def get_repo_tree(owner, repo, branch="main"):
     """Get all files in repository using Git Trees API"""
+    session = get_github_session()
     url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
-    response = requests.get(url, headers=get_github_headers())
-    if response.status_code == 404:
+    response = session.get(url, headers=get_github_headers())
+    if response.status_code == 404 and branch == "main":
         branch = "master"
         url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
-        response = requests.get(url, headers=get_github_headers())
+        response = session.get(url, headers=get_github_headers())
+    if response.status_code == 404:
+        raise ValueError(
+            f"Repository '{owner}/{repo}' not found. Check the URL and ensure the repo exists."
+        )
+    if response.status_code == 403:
+        raise ValueError(
+            f"Access forbidden to '{owner}/{repo}'. Check GITHUB_TOKEN has proper permissions."
+        )
+    if response.status_code == 429:
+        raise ValueError(
+            "GitHub API rate limit exceeded. Set GITHUB_TOKEN in .env to increase limit."
+        )
     response.raise_for_status()
     return response.json().get("tree", [])
 
 
 def get_file_content(owner, repo, path, branch="main"):
     """Get file content from GitHub API"""
+    session = get_github_session()
     url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={branch}"
-    response = requests.get(url, headers=get_github_headers())
+    response = session.get(url, headers=get_github_headers())
+    if response.status_code == 404:
+        raise FileNotFoundError(f"File '{path}' not found in {owner}/{repo}")
+    if response.status_code == 403:
+        raise PermissionError(f"Access forbidden to file '{path}' in {owner}/{repo}")
     response.raise_for_status()
     data = response.json()
     if data.get("encoding") == "base64":
@@ -89,6 +125,12 @@ def fetch_repo_contents(owner, repo, branch="main"):
         ".scala",
         ".sh",
         ".bash",
+        ".html",
+        ".css",
+        ".scss",
+        ".less",
+        ".vue",
+        ".svelte",
         ".json",
         ".yaml",
         ".yml",
@@ -280,13 +322,19 @@ async def code_agent_analyze(request: Request):
             results.append({"question": question, "answer": answer})
             print(f"Answer: {answer[:100]}...")
 
-            return {
-                "message": "Code analysis complete",
-                "repo_url": repo_url,
-                "files_analyzed": len(files),
-                "analysis": results,
-            }
+        return {
+            "message": "Code analysis complete",
+            "repo_url": repo_url,
+            "files_analyzed": len(files),
+            "analysis": results,
+        }
 
+    except ValueError as e:
+        print(f"Validation error: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except (FileNotFoundError, PermissionError) as e:
+        print(f"File access error: {str(e)}")
+        raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
         print(f"Error in code analysis: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
