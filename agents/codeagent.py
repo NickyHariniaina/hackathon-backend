@@ -1,11 +1,9 @@
 from langchain_openai import ChatOpenAI
 from langchain_chroma import Chroma
-from langchain_community.document_loaders import GitLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from git import Repo
 from fastapi import APIRouter, Request, HTTPException
 import asyncio
 from db import get_database_connection
@@ -15,33 +13,192 @@ import os
 import tempfile
 import shutil
 import uuid
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import base64
+import re
 from dotenv import load_dotenv
+
+
+def get_github_session():
+    """Create a requests session with retry logic for transient errors"""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
 
 load_dotenv()
 
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+
 router = APIRouter()
+
+
+def get_github_headers():
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+    return headers
+
+
+def parse_repo_url(repo_url):
+    """Extract owner and repo from URL like https://github.com/owner/repo"""
+    match = re.search(r"github\.com/([^/]+)/([^/.]+)", repo_url)
+    if match:
+        return match.group(1), match.group(2)
+    return None, None
+
+
+def get_repo_tree(owner, repo, branch="main"):
+    """Get all files in repository using Git Trees API"""
+    session = get_github_session()
+    url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
+    response = session.get(url, headers=get_github_headers())
+    if response.status_code == 404 and branch == "main":
+        branch = "master"
+        url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
+        response = session.get(url, headers=get_github_headers())
+    if response.status_code == 404:
+        raise ValueError(
+            f"Repository '{owner}/{repo}' not found. Check the URL and ensure the repo exists."
+        )
+    if response.status_code == 403:
+        raise ValueError(
+            f"Access forbidden to '{owner}/{repo}'. Check GITHUB_TOKEN has proper permissions."
+        )
+    if response.status_code == 429:
+        raise ValueError(
+            "GitHub API rate limit exceeded. Set GITHUB_TOKEN in .env to increase limit."
+        )
+    response.raise_for_status()
+    return response.json().get("tree", [])
+
+
+def get_file_content(owner, repo, path, branch="main"):
+    """Get file content from GitHub API"""
+    session = get_github_session()
+    url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={branch}"
+    response = session.get(url, headers=get_github_headers())
+    if response.status_code == 404:
+        raise FileNotFoundError(f"File '{path}' not found in {owner}/{repo}")
+    if response.status_code == 403:
+        raise PermissionError(f"Access forbidden to file '{path}' in {owner}/{repo}")
+    response.raise_for_status()
+    data = response.json()
+    if data.get("encoding") == "base64":
+        content = base64.b64decode(data["content"]).decode("utf-8", errors="ignore")
+        return content
+    return data.get("content", "")
+
+
+def fetch_repo_contents(owner, repo, branch="main"):
+    """Fetch all code files from repository"""
+    tree = get_repo_tree(owner, repo, branch)
+    code_extensions = {
+        ".py",
+        ".js",
+        ".ts",
+        ".jsx",
+        ".tsx",
+        ".java",
+        ".cpp",
+        ".c",
+        ".go",
+        ".rs",
+        ".rb",
+        ".php",
+        ".cs",
+        ".swift",
+        ".kt",
+        ".scala",
+        ".sh",
+        ".bash",
+        ".html",
+        ".css",
+        ".scss",
+        ".less",
+        ".vue",
+        ".svelte",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".md",
+        ".txt",
+    }
+    skip_dirs = {
+        ".git",
+        "node_modules",
+        "venv",
+        "__pycache__",
+        ".venv",
+        "dist",
+        "build",
+        "target",
+        ".github",
+        "assets",
+        "static",
+        "public",
+    }
+
+    files = []
+    for item in tree:
+        if item.get("type") == "blob":
+            path = item.get("path", "")
+            if any(skip_dir in path.split("/") for skip_dir in skip_dirs):
+                continue
+            ext = os.path.splitext(path)[1].lower()
+            if (
+                ext in code_extensions
+                or path.endswith("requirements.txt")
+                or path.endswith("package.json")
+                or path.endswith("Dockerfile")
+            ):
+                try:
+                    content = get_file_content(owner, repo, path, branch)
+                    files.append({"path": path, "content": content, "type": ext})
+                except Exception as e:
+                    print(f"Skipping {path}: {e}")
+    return files
+
 
 def get_llm():
     return ChatOpenAI(
         model=os.getenv("FREE_LLM_MODEL", "liquid/lfm-2.5-1.2b-thinking:free"),
         base_url="https://openrouter.ai/api/v1",
         api_key=os.getenv("OPENROUTER_API_KEY"),
-        temperature=0
+        temperature=0,
     )
+
 
 def get_embeddings():
     return HuggingFaceEmbeddings(
-        model_name=os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+        model_name=os.getenv(
+            "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+        )
     )
+
 
 def query_codebase(vectorstore, question, llm):
     """Query the codebase with a specific question - USING invoke() NOT get_relevant_documents()"""
     if vectorstore is None:
         return "No code found to analyze"
-    
+
     # FIXED: Use invoke() instead of deprecated get_relevant_documents()
     retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
-    
+
     try:
         # New way: use invoke()
         relevant_docs = retriever.invoke(question)
@@ -51,30 +208,36 @@ def query_codebase(vectorstore, question, llm):
             relevant_docs = retriever.get_relevant_documents(question)
         except:
             return "Unable to retrieve code context"
-    
+
     context = "\n\n".join([doc.page_content for doc in relevant_docs])
-    
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a code reviewer analyzing a hackathon project.
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """You are a code reviewer analyzing a hackathon project.
 Answer based on the code provided. Be concise - one paragraph, max 70 words.
-If you can't determine something, say so honestly."""),
-        ("human", """Code Context:
+If you can't determine something, say so honestly.""",
+            ),
+            (
+                "human",
+                """Code Context:
 {context}
 
 Question: {question}
 
-Answer:""")
-    ])
-    
+Answer:""",
+            ),
+        ]
+    )
+
     chain = prompt | llm | StrOutputParser()
     try:
-        response = chain.invoke({
-            "context": context[:3000],
-            "question": question
-        })
+        response = chain.invoke({"context": context[:3000], "question": question})
         return response
     except Exception as e:
         return f"Analysis error: {str(e)}"
+
 
 @router.get("/code-agent")
 async def codeAgent_endpoint():
@@ -85,15 +248,14 @@ async def codeAgent_endpoint():
             "Clone and analyze GitHub repositories",
             "Technology stack detection",
             "Code quality assessment",
-            "Dependency analysis"
+            "Dependency analysis",
         ],
         "usage": {
             "endpoint": "POST /api/code-agent/analyze",
-            "body": {
-                "repo_url": "https://github.com/username/repository"
-            }
-        }
+            "body": {"repo_url": "https://github.com/username/repository"},
+        },
     }
+
 
 @router.post("/code-agent/analyze")
 async def code_agent_analyze(request: Request):
@@ -101,111 +263,121 @@ async def code_agent_analyze(request: Request):
     try:
         data = await request.json()
         repo_url = data.get("repo_url", "")
-        
+
         if not repo_url:
             raise HTTPException(status_code=400, detail="Repository URL is required")
-        
-        print(f"Analyzing repository: {repo_url}")
-        
-        # Create temp directory
-        temp_dir = tempfile.mkdtemp()
-        
-        try:
-            # Clone repo
-            print("Cloning repository...")
-            repo = Repo.clone_from(repo_url, to_path=temp_dir)
-            branch = repo.head.reference
-            print(f"Cloned branch: {branch}")
-            
-            # Load documents
-            loader = GitLoader(repo_path=temp_dir, branch=branch)
-            documents = loader.load()
-            print(f"Loaded {len(documents)} documents")
-            
-            if not documents:
-                return {"message": "No code files found in repository", "analysis": []}
-            
-            # Split documents
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,
-                chunk_overlap=200
-            )
-            chunks = text_splitter.split_documents(documents)
-            print(f"Created {len(chunks)} chunks")
-            
-            # Create vectorstore
-            embeddings = get_embeddings()
-            vectorstore = Chroma.from_documents(
-                documents=chunks,
-                embedding=embeddings,
-                collection_name=f"repo_{uuid.uuid4().hex[:8]}"
-            )
-            
-            # Analyze
-            llm = get_llm()
-            questions = [
-                "What technologies and programming languages are used?",
-                "Explain the project structure and purpose",
-                "How is the code quality?",
-                "What dependencies and libraries are used?"
-            ]
-            
-            results = []
-            for question in questions:
-                print(f"Analyzing: {question}")
-                answer = query_codebase(vectorstore, question, llm)
-                results.append({
-                    "question": question,
-                    "answer": answer
-                })
-                print(f"Answer: {answer[:100]}...")
-            
-            return {
-                "message": "Code analysis complete",
-                "repo_url": repo_url,
-                "files_analyzed": len(documents),
-                "analysis": results
-            }
-            
-        finally:
-            # Cleanup
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            print("Cleaned up temporary files")
-    
-    except Exception as e:
-        print(f"Error in code analysis: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
-# Background task function
-async def invoke_code_agent(repolink: str, project_id: str):
-    """Background task for automatic code analysis"""
-    temp_dir = f"./projects_source_code/{project_id}"
-    
-    try:
-        print(f"Cloning {repolink} into {temp_dir}")
-        repo = Repo.clone_from(repolink, to_path=temp_dir)
-        branch = repo.head.reference
-        
-        loader = GitLoader(repo_path=temp_dir, branch=branch)
-        documents = loader.load()
-        
-        if not documents:
-            print("No documents found")
-            return
-        
+        print(f"Analyzing repository: {repo_url}")
+
+        owner, repo_name = parse_repo_url(repo_url)
+        if not owner or not repo_name:
+            raise HTTPException(status_code=400, detail="Invalid repository URL format")
+
+        print(f"Fetching repo: {owner}/{repo_name}")
+        files = fetch_repo_contents(owner, repo_name)
+        print(f"Fetched {len(files)} files")
+
+        if not files:
+            return {"message": "No code files found in repository", "analysis": []}
+
+        documents = []
+        for f in files:
+            from langchain_core.documents import Document
+
+            documents.append(
+                Document(
+                    page_content=f"File: {f['path']}\n\n{f['content']}",
+                    metadata={"source": f["path"]},
+                )
+            )
+
+        # Split documents
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200
+            chunk_size=1000, chunk_overlap=200
         )
         chunks = text_splitter.split_documents(documents)
-        
+        print(f"Created {len(chunks)} chunks")
+
+        # Create vectorstore
         embeddings = get_embeddings()
         vectorstore = Chroma.from_documents(
             documents=chunks,
             embedding=embeddings,
-            collection_name=f"repo_{project_id}"
+            collection_name=f"repo_{uuid.uuid4().hex[:8]}",
         )
-        
+
+        # Analyze
+        llm = get_llm()
+        questions = [
+            "What technologies and programming languages are used?",
+            "Explain the project structure and purpose",
+            "How is the code quality?",
+            "What dependencies and libraries are used?",
+        ]
+
+        results = []
+        for question in questions:
+            print(f"Analyzing: {question}")
+            answer = query_codebase(vectorstore, question, llm)
+            results.append({"question": question, "answer": answer})
+            print(f"Answer: {answer[:100]}...")
+
+        return {
+            "message": "Code analysis complete",
+            "repo_url": repo_url,
+            "files_analyzed": len(files),
+            "analysis": results,
+        }
+
+    except ValueError as e:
+        print(f"Validation error: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except (FileNotFoundError, PermissionError) as e:
+        print(f"File access error: {str(e)}")
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        print(f"Error in code analysis: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+
+# Background task function
+async def invoke_code_agent(repolink: str, project_id: str):
+    """Background task for automatic code analysis"""
+    try:
+        owner, repo_name = parse_repo_url(repolink)
+        if not owner or not repo_name:
+            print(f"Code Agent Error: Invalid repo URL {repolink}")
+            return
+
+        print(f"Fetching {owner}/{repo_name} via GitHub API")
+        files = fetch_repo_contents(owner, repo_name)
+        print(f"Fetched {len(files)} files")
+
+        if not files:
+            print("No files found")
+            return
+
+        documents = []
+        for f in files:
+            from langchain_core.documents import Document
+
+            documents.append(
+                Document(
+                    page_content=f"File: {f['path']}\n\n{f['content']}",
+                    metadata={"source": f["path"]},
+                )
+            )
+
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000, chunk_overlap=200
+        )
+        chunks = text_splitter.split_documents(documents)
+
+        embeddings = get_embeddings()
+        vectorstore = Chroma.from_documents(
+            documents=chunks, embedding=embeddings, collection_name=f"repo_{project_id}"
+        )
+
         conn = get_database_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT technologies FROM hackathons LIMIT 1")
@@ -213,34 +385,31 @@ async def invoke_code_agent(repolink: str, project_id: str):
         technologies = hackathon["technologies"] if hackathon else ""
         cur.close()
         conn.close()
-        
+
         llm = get_llm()
         questions = [
             "What technologies and programming language are used?",
             "Explain the project in brief",
             "How is the code quality?",
-            f"Does it use these required technologies: {technologies}?"
+            f"Does it use these required technologies: {technologies}?",
         ]
-        
+
         results = []
         for question in questions:
             answer = query_codebase(vectorstore, question, llm)
-            results.append({
-                "question": question,
-                "answer": answer
-            })
-        
+            results.append({"question": question, "answer": answer})
+
         conn = get_database_connection()
         cur = conn.cursor()
         cur.execute(
             "UPDATE projects SET code_agent_analysis = %s WHERE project_id = %s",
-            (json.dumps(results), project_id)
+            (json.dumps(results), project_id),
         )
         conn.commit()
         cur.close()
         conn.close()
-        
+
         print(f"Code Agent: Analysis complete for project {project_id}")
-        
+
     except Exception as e:
         print(f"Code Agent Error: {str(e)}")
