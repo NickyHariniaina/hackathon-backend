@@ -95,6 +95,9 @@ async def create_project(request: Request):
     if hackathon_id:
         asyncio.create_task(invoke_market_agent(project_id, data.get("shortDescription", ""), hackathon_id))
         asyncio.create_task(invoke_code_agent(data.get("githubLink", ""), project_id, hackathon_id))
+    else:
+        asyncio.create_task(invoke_market_agent(project_id, data.get("shortDescription", ""), None))
+        asyncio.create_task(invoke_code_agent(data.get("githubLink", ""), project_id, None))
     
     return {"message": "Project created", "project_id": project_id}
 

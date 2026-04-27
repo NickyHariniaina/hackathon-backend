@@ -428,15 +428,20 @@ async def invoke_code_agent(repolink: str, project_id: str, hackathon_id: int = 
         except Exception as e:
             print(f"Failed to validate repo: {e}")
             save_evaluation(project_id, "Repo Validation", 0, f"Failed to validate repo: {str(e)}", "code")
-            return
-            conn = get_database_connection()
-            cur = conn.cursor(cursor_factory=RealDictCursor)
-            cur.execute("SELECT criteria FROM hackathons WHERE id = %s", (hackathon_id,))
-            hackathon = cur.fetchone()
-            if hackathon:
-                criteria_text = hackathon["criteria"] or ""
-            cur.close()
-            conn.close()
+            # Continue with empty criteria since we couldn't validate
+            criteria_text = ""
+            if hackathon_id:
+                try:
+                    conn = get_database_connection()
+                    cur = conn.cursor(cursor_factory=RealDictCursor)
+                    cur.execute("SELECT criteria FROM hackathons WHERE id = %s", (hackathon_id,))
+                    hackathon = cur.fetchone()
+                    if hackathon:
+                        criteria_text = hackathon["criteria"] or ""
+                    cur.close()
+                    conn.close()
+                except:
+                    pass
         
         print(f"Cloning {repolink} into {temp_dir}")
         repo = Repo.clone_from(repolink, to_path=temp_dir)
