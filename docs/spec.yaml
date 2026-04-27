@@ -68,12 +68,24 @@ paths:
                   Hello:
                     type: string
                     example: "World"
-              example:
-                Hello: "World"
-      x-code-samples:
-        - lang: curl
-          source: |
-            curl http://localhost:8000/api
+
+  /crud-agent:
+    get:
+      tags:
+        - Projects
+      summary: CRUD agent status
+      description: Returns a simple status message
+      responses:
+        '200':
+          description: Status message
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Hello from Crud Agent"
 
   /market-agent:
     get:
