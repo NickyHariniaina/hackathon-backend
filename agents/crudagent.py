@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, HTTPException
+from fastapi import Query
+from typing import Optional
 from db import get_database_connection
 from agents.codeagent import invoke_code_agent
 import asyncio
@@ -70,8 +72,12 @@ def semantic_search(query, documents, k=10):
 def crudAgent_endpoint():
     return {"message": "Hello from Crud Agent, Okay I'm not really an agent"}
 
-@router.post("/create-project")
+@router.post("/create-project", tags=["Projects"], summary="Create project and trigger AI analysis")
 async def create_project(request: Request):
+    """Create a new project. Triggers code and market analysis asynchronously.
+    
+    Body fields: shortDescription, longDescription, githubLink, theme, hackathonId (optional)
+    """
     data = await request.json()
     print(data)
     
@@ -101,8 +107,18 @@ async def create_project(request: Request):
     
     return {"message": "Project created", "project_id": project_id}
 
-@router.post("/create-hackathon")
+@router.post("/create-hackathon", tags=["Hackathons"], summary="Create a new hackathon")
 async def create_hackathon(request: Request):
+    """Create a new hackathon with evaluation criteria.
+    
+    Body fields:
+    - name: Hackathon name
+    - description: Description
+    - theme: Theme (optional)
+    - is_allowed: Whether submissions are allowed
+    - criteria: Comma-separated criteria (e.g., "Code Quality, Innovation")
+    - deadline: Deadline timestamp (optional)
+    """
     data = await request.json()
     
     conn = get_database_connection()
@@ -124,8 +140,9 @@ async def create_hackathon(request: Request):
     return {"message": "Hackathon created", "hackathon_id": hackathon_id}
 
 
-@router.get("/get-hackathon/{hackathon_id}")
+@router.get("/get-hackathon/{hackathon_id}", tags=["Hackathons"], summary="Get hackathon details")
 async def get_hackathon(hackathon_id: int):
+    """Get details of a specific hackathon by ID."""
     conn = get_database_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT * FROM hackathons WHERE id = %s", (hackathon_id,))
@@ -144,8 +161,9 @@ async def get_hackathon(hackathon_id: int):
     return {"message": "successful", "hackathon": hackathon}
 
 
-@router.get("/get-all-hackathons")
+@router.get("/get-all-hackathons", tags=["Hackathons"], summary="List all hackathons")
 async def get_all_hackathons():
+    """Get list of all hackathons ordered by creation date."""
     conn = get_database_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT * FROM hackathons ORDER BY created_at DESC")
@@ -165,8 +183,9 @@ async def get_all_hackathons():
     
     return {"message": "successful", "hackathons": result}
 
-@router.get("/get-hackathon-projects/{hackathon_id}")
+@router.get("/get-hackathon-projects/{hackathon_id}", tags=["Projects"], summary="List projects in a hackathon")
 async def get_hackathon_projects(hackathon_id: int):
+    """Get all projects submitted to a specific hackathon."""
     conn = get_database_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT * FROM projects WHERE hackathon_id = %s ORDER BY created_at DESC", (hackathon_id,))
@@ -184,8 +203,11 @@ async def get_hackathon_projects(hackathon_id: int):
     
     return {"message": "successful", "projects": result}
 
-@router.get("/get-project-score/{project_id}")
+@router.get("/get-project-score/{project_id}", tags=["Scoring"], summary="Get project score")
 async def get_project_score(project_id: str):
+    """Get total score and evaluation details for a project.
+    
+    Returns average of all criterion scores plus individual scores."""
     conn = get_database_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
@@ -221,8 +243,9 @@ async def get_project_score(project_id: str):
         "scores": scores
     }
 
-@router.get("/get-hackathon-leaderboard/{hackathon_id}")
+@router.get("/get-hackathon-leaderboard/{hackathon_id}", tags=["Scoring"], summary="Get hackathon leaderboard")
 async def get_hackathon_leaderboard(hackathon_id: int):
+    """Get ranked projects for a hackathon based on their scores."""
     conn = get_database_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     

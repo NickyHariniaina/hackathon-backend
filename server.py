@@ -13,7 +13,11 @@ load_dotenv()
 
 init_db()
 
-app = FastAPI()
+app = FastAPI(
+    title="Hackathon API",
+    description="API for hackathon project management and evaluation",
+    version="1.0.0"
+)
 
 app.add_middleware(
     CORSMiddleware,
