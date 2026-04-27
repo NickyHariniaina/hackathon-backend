@@ -37,48 +37,77 @@ All agents mounted under `/api` prefix.
 ## API Endpoints
 
 ### Hackathons
-- `POST /api/create-hackathon` - Create hackathon with `criteria`
+- `POST /api/create-hackathon` - Create hackathon with `criteria` (e.g., "Code Quality, Innovation, Tech Stack")
 - `GET /api/get-hackathon/{id}` - Get hackathon details
 - `GET /api/get-all-hackathons` - List all hackathons
 
 ### Projects
-- `POST /api/create-project` - Submit project to hackathon (`hackathonId` required)
-- `GET /api/get-project/{id}` - Get project details
-- `GET /api/get-hackathon-projects/{id}` - List projects in hackathon
+- `POST /api/create-project` - Submit project to hackathon (requires `hackathonId`)
+- `GET /api/get-project/{id}` - Get project with evaluations
+- `GET /api/get-hackathon-projects/{hackathon_id}` - List projects in hackathon
 - `GET /api/get-all` - List all projects
 
 ### Scoring
-- `GET /api/get-project-score/{id}` - Get total score and evaluations
-- `GET /api/get-hackathon-leaderboard/{id}` - Get ranked projects
+- `GET /api/get-project-score/{project_id}` - Get total score and evaluation details
+- `GET /api/get-hackathon-leaderboard/{hackathon_id}` - Get ranked projects
 
 ### Legacy
 - `POST /api/search` - Semantic search projects
 - `POST /api/review` - Mark project as reviewed
+- `GET /api/get-all` - List all projects
 
 ## Database Schema
 
 ```
 hackathons: id, name, description, theme, is_allowed, criteria TEXT, deadline, created_at
 projects: id, project_id, hackathon_id (FK), short_description, long_description, github_link, theme, is_reviewed, code_agent_analysis (JSONB), market_agent_analysis (JSONB), created_at
-evaluations: id, project_id (FK), criteria_name, score, remarks, agent_type, created_at
+evaluations: id, project_id (FK), criteria_name, score DECIMAL, remarks, agent_type, created_at
 ```
 
 ## Criteria Format
 
-`criteria` TEXT in hackathons: `"Code Quality, Innovation, Tech Stack"`
+`criteria` TEXT in hackathons:
+```
+"Code Quality, Innovation, Tech Stack"
+```
 
-L'IA génère une question par défaut pour chaque critère.
+The AI generates a default question for each criteria.
 
 ## Test Commands
 
 ```bash
-# Create hackathon
+# Start server
+python server.py
+
+# 1. Create a hackathon with criteria
 curl -X POST http://localhost:8000/api/create-hackathon \
   -H "Content-Type: application/json" \
-  -d '{"name": "AI Hack", "criteria": "Code Quality, Innovation"}'
+  -d '{"name": "AI Hackathon", "description": "Build with AI", "criteria": "Code Quality, Innovation, Tech Stack"}'
 
-# Submit project
+# 2. Get all hackathons
+curl http://localhost:8000/api/get-all-hackathons
+
+# 3. Get specific hackathon
+curl http://localhost:8000/api/get-hackathon/1
+
+# 4. Submit project to hackathon
 curl -X POST http://localhost:8000/api/create-project \
   -H "Content-Type: application/json" \
-  -d '{"shortDescription": "My Project", "githubLink": "https://github.com/user/repo", "hackathonId": 1}'
+  -d '{"shortDescription": "My AI Project", "githubLink": "https://github.com/user/repo", "hackathonId": 1}'
+
+# 5. Get project (after evaluation)
+curl http://localhost:8000/api/get-project/{project_id}
+
+# 6. Get projects in hackathon
+curl http://localhost:8000/api/get-hackathon-projects/1
+
+# 7. Get project score
+curl http://localhost:8000/api/get-project-score/{project_id}
+
+# 8. Get leaderboard
+curl http://localhost:8000/api/get-hackathon-leaderboard/1
+
+# OpenAPI docs
+# Swagger UI: http://localhost:8000/docs
+# ReDoc: http://localhost:8000/redoc
 ```

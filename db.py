@@ -16,20 +16,28 @@ def init_db():
     conn = get_database_connection()
     cur = conn.cursor()
     
+    cur.execute("DROP TABLE IF EXISTS evaluations CASCADE")
+    cur.execute("DROP TABLE IF EXISTS projects CASCADE")
+    cur.execute("DROP TABLE IF EXISTS hackathons CASCADE")
+    
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS hackathons (
+        CREATE TABLE hackathons (
             id SERIAL PRIMARY KEY,
-            technologies TEXT DEFAULT '',
+            name VARCHAR(255) NOT NULL,
+            description TEXT DEFAULT '',
             theme TEXT DEFAULT '',
             is_allowed BOOLEAN DEFAULT FALSE,
+            criteria TEXT DEFAULT '',
+            deadline TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS projects (
+        CREATE TABLE projects (
             id SERIAL PRIMARY KEY,
             project_id VARCHAR(255) UNIQUE NOT NULL,
+            hackathon_id INTEGER REFERENCES hackathons(id) ON DELETE SET NULL,
             short_description TEXT DEFAULT '',
             long_description TEXT DEFAULT '',
             github_link TEXT DEFAULT '',
@@ -41,9 +49,21 @@ def init_db():
         )
     """)
     
+    cur.execute("""
+        CREATE TABLE evaluations (
+            id SERIAL PRIMARY KEY,
+            project_id VARCHAR(255) REFERENCES projects(project_id) ON DELETE CASCADE,
+            criteria_name VARCHAR(255) NOT NULL,
+            score DECIMAL(3,2) DEFAULT 0.00,
+            remarks TEXT DEFAULT '',
+            agent_type VARCHAR(50) DEFAULT 'code',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_projects_hackathon_id ON projects(hackathon_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_projects_project_id ON projects(project_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_projects_is_reviewed ON projects(is_reviewed)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_projects_created_at ON projects(created_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_evaluations_project_id ON evaluations(project_id)")
     
     conn.commit()
     cur.close()

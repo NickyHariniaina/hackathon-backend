@@ -6,6 +6,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from fastapi import APIRouter, Request, HTTPException
 import asyncio
+import re
 from db import get_database_connection
 from psycopg2.extras import RealDictCursor
 import json
@@ -222,19 +223,16 @@ def get_embeddings():
 
 
 def query_codebase(vectorstore, question, llm):
-    """Query the codebase with a specific question - USING invoke() NOT get_relevant_documents()"""
+    """Query the codebase with a specific question"""
     if vectorstore is None:
         return "No code found to analyze"
-
-    # FIXED: Use invoke() instead of deprecated get_relevant_documents()
+    
     retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
 
     try:
-        # New way: use invoke()
         relevant_docs = retriever.invoke(question)
     except AttributeError:
         try:
-            # Fallback: try get_relevant_documents for older versions
             relevant_docs = retriever.get_relevant_documents(question)
         except:
             return "Unable to retrieve code context"
@@ -268,6 +266,40 @@ Answer:""",
     except Exception as e:
         return f"Analysis error: {str(e)}"
 
+
+def extract_score_from_text(text: str) -> float:
+    """Extract a score between 0 and 1 from text response"""
+    patterns = [
+        r'(\d+\.?\d*)/10',
+        r'(\d+\.?\d*)%',
+        r'[Ss]core:?\s*(\d+\.?\d*)',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            value = float(match.group(1))
+            if value > 1:
+                value = value / 100 if value <= 100 else value / 10
+            return min(1.0, max(0.0, value))
+    
+    return 0.5
+
+
+def save_evaluation(project_id: str, criteria_name: str, score: float, remarks: str, agent_type: str):
+    """Save evaluation to database"""
+    conn = get_database_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO evaluations (project_id, criteria_name, score, remarks, agent_type)
+        VALUES (%s, %s, %s, %s, %s)
+        """,
+        (project_id, criteria_name, score, remarks, agent_type)
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
 
 @router.get("/code-agent")
 async def codeAgent_endpoint():
@@ -369,14 +401,52 @@ async def code_agent_analyze(request: Request):
         print(f"Error in code analysis: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
-
-# Background task function
-async def invoke_code_agent(repolink: str, project_id: str):
+async def invoke_code_agent(repolink: str, project_id: str, hackathon_id: int = None):
     """Background task for automatic code analysis"""
     try:
-        owner, repo_name = parse_repo_url(repolink)
-        if not owner or not repo_name:
-            print(f"Code Agent Error: Invalid repo URL {repolink}")
+        # Validate GitHub URL first
+        import requests
+        if not repolink.startswith("http"):
+            print(f"Invalid repo URL: {repolink}")
+            return
+        
+        # Check if repo exists (HEAD request)
+        try:
+            response = requests.head(repolink, allow_redirects=True, timeout=10)
+            if response.status_code == 404:
+                print(f"Repo not found (404): {repolink}")
+                save_evaluation(project_id, "Repo Validation", 0, "GitHub repository not found (404)", "code")
+                return
+            elif response.status_code == 403:
+                print(f"Repo access forbidden (403): {repolink}")
+                save_evaluation(project_id, "Repo Validation", 0, "GitHub repository access forbidden", "code")
+                return
+            elif response.status_code >= 400:
+                print(f"Repo error ({response.status_code}): {repolink}")
+                save_evaluation(project_id, "Repo Validation", 0, f"GitHub error: {response.status_code}", "code")
+                return
+        except Exception as e:
+            print(f"Failed to validate repo: {e}")
+            save_evaluation(project_id, "Repo Validation", 0, f"Failed to validate repo: {str(e)}", "code")
+            return
+            conn = get_database_connection()
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("SELECT criteria FROM hackathons WHERE id = %s", (hackathon_id,))
+            hackathon = cur.fetchone()
+            if hackathon:
+                criteria_text = hackathon["criteria"] or ""
+            cur.close()
+            conn.close()
+        
+        print(f"Cloning {repolink} into {temp_dir}")
+        repo = Repo.clone_from(repolink, to_path=temp_dir)
+        branch = repo.head.reference
+        
+        loader = GitLoader(repo_path=temp_dir, branch=branch)
+        documents = loader.load()
+        
+        if not documents:
+            print("No documents found")
             return
 
         print(f"Fetching {owner}/{repo_name} via GitHub API")
@@ -407,28 +477,34 @@ async def invoke_code_agent(repolink: str, project_id: str):
         vectorstore = Chroma.from_documents(
             documents=chunks, embedding=embeddings, collection_name=f"repo_{project_id}"
         )
-
-        conn = get_database_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT technologies FROM hackathons LIMIT 1")
-        hackathon = cur.fetchone()
-        technologies = hackathon["technologies"] if hackathon else ""
-        cur.close()
-        conn.close()
-
+        
         llm = get_llm()
-        questions = [
-            "What technologies and programming language are used?",
-            "Explain the project in brief",
-            "How is the code quality?",
-            f"Does it use these required technologies: {technologies}?",
-        ]
-
+        
+        default_questions = {
+            "Code Quality": "How is the code quality? Rate 0-10.",
+            "Tech Stack": "What technologies and frameworks are used?",
+            "Innovation": "How innovative is this project? Rate 0-10.",
+            "Market Potential": "What is the market potential? Rate 0-10.",
+        }
+        
+        criteria_list = [c.strip() for c in criteria_text.split(',') if c.strip()]
+        
+        if not criteria_list:
+            criteria_list = ["Code Quality", "Tech Stack", "Innovation"]
+        
         results = []
-        for question in questions:
+        for name in criteria_list:
+            question = default_questions.get(name, f"Evaluate {name}. Rate 0-10.")
             answer = query_codebase(vectorstore, question, llm)
-            results.append({"question": question, "answer": answer})
-
+            
+            if "Rate 0-10" in question:
+                score = extract_score_from_text(answer)
+            else:
+                score = 1.0 if answer else 0.5
+            
+            save_evaluation(project_id, name, score, answer, "code")
+            results.append({"name": name, "score": score, "answer": answer[:100]})
+        
         conn = get_database_connection()
         cur = conn.cursor()
         cur.execute(
