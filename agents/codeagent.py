@@ -269,6 +269,58 @@ Answer:""",
         return f"Analysis error: {str(e)}"
 
 
+def analyze_repository(repo_url: str, questions: list[str]) -> tuple[list[dict], int]:
+    """Analyze a GitHub repository using the same logic as POST /code-agent/analyze
+    Returns: (analysis_results, number_of_files_analyzed)
+    """
+    owner, repo_name = parse_repo_url(repo_url)
+    if not owner or not repo_name:
+        raise ValueError("Invalid repository URL format")
+
+    print(f"Fetching repo: {owner}/{repo_name}")
+    files = fetch_repo_contents(owner, repo_name)
+    num_files = len(files)
+    print(f"Fetched {num_files} files")
+
+    if not files:
+        return ([], 0)
+
+    documents = []
+    for f in files:
+        from langchain_core.documents import Document
+
+        documents.append(
+            Document(
+                page_content=f"File: {f['path']}\n\n{f['content']}",
+                metadata={"source": f["path"]},
+            )
+        )
+
+    # Split documents
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    chunks = text_splitter.split_documents(documents)
+    print(f"Created {len(chunks)} chunks")
+
+    # Create vectorstore
+    embeddings = get_embeddings()
+    vectorstore = Chroma.from_documents(
+        documents=chunks,
+        embedding=embeddings,
+        collection_name=f"repo_{uuid.uuid4().hex[:8]}",
+    )
+
+    # Analyze with questions
+    llm = get_llm()
+    results = []
+    for question in questions:
+        print(f"Analyzing: {question}")
+        answer = query_codebase(vectorstore, question, llm)
+        results.append({"question": question, "answer": answer})
+        print(f"Answer: {answer[:100]}...")
+
+    return (results, num_files)
+
+
 @router.get("/code-agent")
 async def codeAgent_endpoint():
     """Test endpoint - returns available functionality"""
@@ -299,45 +351,6 @@ async def code_agent_analyze(request: Request):
 
         print(f"Analyzing repository: {repo_url}")
 
-        owner, repo_name = parse_repo_url(repo_url)
-        if not owner or not repo_name:
-            raise HTTPException(status_code=400, detail="Invalid repository URL format")
-
-        print(f"Fetching repo: {owner}/{repo_name}")
-        files = fetch_repo_contents(owner, repo_name)
-        print(f"Fetched {len(files)} files")
-
-        if not files:
-            return {"message": "No code files found in repository", "analysis": []}
-
-        documents = []
-        for f in files:
-            from langchain_core.documents import Document
-
-            documents.append(
-                Document(
-                    page_content=f"File: {f['path']}\n\n{f['content']}",
-                    metadata={"source": f["path"]},
-                )
-            )
-
-        # Split documents
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000, chunk_overlap=200
-        )
-        chunks = text_splitter.split_documents(documents)
-        print(f"Created {len(chunks)} chunks")
-
-        # Create vectorstore
-        embeddings = get_embeddings()
-        vectorstore = Chroma.from_documents(
-            documents=chunks,
-            embedding=embeddings,
-            collection_name=f"repo_{uuid.uuid4().hex[:8]}",
-        )
-
-        # Analyze
-        llm = get_llm()
         questions = [
             "What technologies and programming languages are used?",
             "Explain the project structure and purpose",
@@ -345,17 +358,15 @@ async def code_agent_analyze(request: Request):
             "What dependencies and libraries are used?",
         ]
 
-        results = []
-        for question in questions:
-            print(f"Analyzing: {question}")
-            answer = query_codebase(vectorstore, question, llm)
-            results.append({"question": question, "answer": answer})
-            print(f"Answer: {answer[:100]}...")
+        results, num_files = analyze_repository(repo_url, questions)
+
+        if num_files == 0:
+            return {"message": "No code files found in repository", "analysis": []}
 
         return {
             "message": "Code analysis complete",
             "repo_url": repo_url,
-            "files_analyzed": len(files),
+            "files_analyzed": num_files,
             "analysis": results,
         }
 
@@ -372,42 +383,8 @@ async def code_agent_analyze(request: Request):
 
 # Background task function
 async def invoke_code_agent(repolink: str, project_id: str):
-    """Background task for automatic code analysis"""
+    """Background task for automatic code analysis using same logic as POST /code-agent/analyze"""
     try:
-        owner, repo_name = parse_repo_url(repolink)
-        if not owner or not repo_name:
-            print(f"Code Agent Error: Invalid repo URL {repolink}")
-            return
-
-        print(f"Fetching {owner}/{repo_name} via GitHub API")
-        files = fetch_repo_contents(owner, repo_name)
-        print(f"Fetched {len(files)} files")
-
-        if not files:
-            print("No files found")
-            return
-
-        documents = []
-        for f in files:
-            from langchain_core.documents import Document
-
-            documents.append(
-                Document(
-                    page_content=f"File: {f['path']}\n\n{f['content']}",
-                    metadata={"source": f["path"]},
-                )
-            )
-
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000, chunk_overlap=200
-        )
-        chunks = text_splitter.split_documents(documents)
-
-        embeddings = get_embeddings()
-        vectorstore = Chroma.from_documents(
-            documents=chunks, embedding=embeddings, collection_name=f"repo_{project_id}"
-        )
-
         conn = get_database_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT technologies FROM hackathons LIMIT 1")
@@ -416,7 +393,6 @@ async def invoke_code_agent(repolink: str, project_id: str):
         cur.close()
         conn.close()
 
-        llm = get_llm()
         questions = [
             "What technologies and programming language are used?",
             "Explain the project in brief",
@@ -424,10 +400,8 @@ async def invoke_code_agent(repolink: str, project_id: str):
             f"Does it use these required technologies: {technologies}?",
         ]
 
-        results = []
-        for question in questions:
-            answer = query_codebase(vectorstore, question, llm)
-            results.append({"question": question, "answer": answer})
+        results, num_files = analyze_repository(repolink, questions)
+        print(f"Code Agent: Analyzed {num_files} files for project {project_id}")
 
         conn = get_database_connection()
         cur = conn.cursor()
