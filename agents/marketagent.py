@@ -191,26 +191,27 @@ async def market_agent_analyze(request: Request):
         print(f"Error in market analysis: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Background task function
-async def invoke_market_agent(project_id: str, idea: str):
+async def invoke_market_agent(project_id: str, idea: str, hackathon_id: int = None):
     """Background task for automatic project analysis"""
     try:
-        conn = get_database_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT theme FROM hackathons LIMIT 1")
-        hackathon = cur.fetchone()
-        cur.close()
-        conn.close()
+        criteria_text = ""
+        if hackathon_id:
+            conn = get_database_connection()
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("SELECT criteria FROM hackathons WHERE id = %s", (hackathon_id,))
+            hackathon = cur.fetchone()
+            if hackathon:
+                criteria_text = hackathon["criteria"] or ""
+            cur.close()
+            conn.close()
         
-        theme = hackathon["theme"] if hackathon else "General"
-        
-        result = await analyze_market(idea, theme)
+        result = await analyze_market(idea, "")
         
         conn = get_database_connection()
         cur = conn.cursor()
         cur.execute(
-            "UPDATE projects SET market_agent_analysis = %s, theme = %s WHERE project_id = %s",
-            (json.dumps(result["analysis"]), result["matched_theme"], project_id)
+            "UPDATE projects SET market_agent_analysis = %s WHERE project_id = %s",
+            (json.dumps(result["analysis"]), project_id)
         )
         conn.commit()
         cur.close()

@@ -76,24 +76,25 @@ async def create_project(request: Request):
     print(data)
     
     project_id = str(uuid.uuid4())
+    hackathon_id = data.get("hackathonId")
     
     conn = get_database_connection()
     cur = conn.cursor()
     cur.execute(
         """
-        INSERT INTO projects (project_id, short_description, long_description, github_link, theme, is_reviewed)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO projects (project_id, hackathon_id, short_description, long_description, github_link, theme, is_reviewed)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         """,
-        (project_id, data.get("shortDescription", ""), data.get("longDescription", ""), 
-         data.get("githubLink", ""), "", False)
+        (project_id, hackathon_id, data.get("shortDescription", ""), data.get("longDescription", ""), 
+         data.get("githubLink", ""), data.get("theme", ""), False)
     )
     conn.commit()
     cur.close()
     conn.close()
 
-    # Run agents asynchronously
-    asyncio.create_task(invoke_market_agent(project_id, data.get("shortDescription", "")))
-    asyncio.create_task(invoke_code_agent(data.get("githubLink", ""), project_id))
+    if hackathon_id:
+        asyncio.create_task(invoke_market_agent(project_id, data.get("shortDescription", ""), hackathon_id))
+        asyncio.create_task(invoke_code_agent(data.get("githubLink", ""), project_id, hackathon_id))
     
     return {"message": "Project created", "project_id": project_id}
 
@@ -105,16 +106,150 @@ async def create_hackathon(request: Request):
     cur = conn.cursor()
     cur.execute(
         """
-        INSERT INTO hackathons (technologies, theme, is_allowed)
-        VALUES (%s, %s, %s)
+        INSERT INTO hackathons (name, description, theme, is_allowed, criteria, deadline)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id
         """,
-        (data.get("technologies", ""), data.get("theme", ""), data.get("isAllowed", False))
+        (data.get("name", ""), data.get("description", ""), data.get("theme", ""),
+         data.get("isAllowed", False), data.get("criteria", ""), data.get("deadline", None))
     )
+    hackathon_id = cur.fetchone()[0]
     conn.commit()
     cur.close()
     conn.close()
 
-    return {"message": "Hackathon created"}
+    return {"message": "Hackathon created", "hackathon_id": hackathon_id}
+
+
+@router.get("/get-hackathon/{hackathon_id}")
+async def get_hackathon(hackathon_id: int):
+    conn = get_database_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM hackathons WHERE id = %s", (hackathon_id,))
+    hackathon = cur.fetchone()
+    cur.close()
+    conn.close()
+    
+    if hackathon:
+        hackathon["_id"] = str(hackathon["id"])
+        del hackathon["id"]
+        if hackathon.get("created_at"):
+            hackathon["created_at"] = hackathon["created_at"].isoformat()
+        if hackathon.get("deadline"):
+            hackathon["deadline"] = hackathon["deadline"].isoformat()
+    
+    return {"message": "successful", "hackathon": hackathon}
+
+
+@router.get("/get-all-hackathons")
+async def get_all_hackathons():
+    conn = get_database_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM hackathons ORDER BY created_at DESC")
+    hackathons = cur.fetchall()
+    cur.close()
+    conn.close()
+    
+    result = []
+    for h in hackathons:
+        h["_id"] = str(h["id"])
+        del h["id"]
+        if h.get("created_at"):
+            h["created_at"] = h["created_at"].isoformat()
+        if h.get("deadline"):
+            h["deadline"] = h["deadline"].isoformat()
+        result.append(h)
+    
+    return {"message": "successful", "hackathons": result}
+
+@router.get("/get-hackathon-projects/{hackathon_id}")
+async def get_hackathon_projects(hackathon_id: int):
+    conn = get_database_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM projects WHERE hackathon_id = %s ORDER BY created_at DESC", (hackathon_id,))
+    projects = cur.fetchall()
+    cur.close()
+    conn.close()
+    
+    result = []
+    for p in projects:
+        p["_id"] = str(p["id"])
+        del p["id"]
+        if p.get("created_at"):
+            p["created_at"] = p["created_at"].isoformat()
+        result.append(p)
+    
+    return {"message": "successful", "projects": result}
+
+@router.get("/get-project-score/{project_id}")
+async def get_project_score(project_id: str):
+    conn = get_database_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cur.execute("""
+        SELECT p.*, h.criteria, h.name as hackathon_name 
+        FROM projects p 
+        LEFT JOIN hackathons h ON p.hackathon_id = h.id 
+        WHERE p.project_id = %s
+    """, (project_id,))
+    project = cur.fetchone()
+    
+    if not project:
+        cur.close()
+        conn.close()
+        return {"message": "error", "error": "Project not found"}
+    
+    cur.execute("SELECT criteria_name, score, remarks FROM evaluations WHERE project_id = %s", (project_id,))
+    evaluations = cur.fetchall()
+    cur.close()
+    conn.close()
+    
+    total_score = sum(float(e["score"]) for e in evaluations) / len(evaluations) if evaluations else 0
+    
+    scores = {}
+    for eval in evaluations:
+        scores[eval["criteria_name"]] = {"score": float(eval["score"]), "remarks": eval["remarks"]}
+    
+    return {
+        "message": "successful",
+        "project_id": project_id,
+        "hackathon_name": project.get("hackathon_name"),
+        "total_score": round(total_score, 2),
+        "scores": scores
+    }
+
+@router.get("/get-hackathon-leaderboard/{hackathon_id}")
+async def get_hackathon_leaderboard(hackathon_id: int):
+    conn = get_database_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cur.execute("SELECT criteria, name FROM hackathons WHERE id = %s", (hackathon_id,))
+    hackathon = cur.fetchone()
+    if not hackathon:
+        cur.close()
+        conn.close()
+        return {"message": "error", "error": "Hackathon not found"}
+    
+    cur.execute("SELECT project_id, short_description, github_link FROM projects WHERE hackathon_id = %s", (hackathon_id,))
+    projects = cur.fetchall()
+    
+    ranked = []
+    for proj in projects:
+        cur.execute("SELECT criteria_name, score FROM evaluations WHERE project_id = %s", (proj["project_id"],))
+        evals = cur.fetchall()
+        total_score = sum(float(e["score"]) for e in evals) / len(evals) if evals else 0
+        ranked.append({
+            "project_id": proj["project_id"],
+            "short_description": proj["short_description"],
+            "github_link": proj["github_link"],
+            "score": round(total_score, 2)
+        })
+    
+    cur.close()
+    conn.close()
+    ranked.sort(key=lambda x: x["score"], reverse=True)
+    
+    return {"message": "successful", "hackathon_name": hackathon["name"], "leaderboard": ranked}
 
 @router.get("/get-project/{project_id}")
 async def get_project(project_id: str):
