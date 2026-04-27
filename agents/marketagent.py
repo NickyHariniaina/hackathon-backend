@@ -3,16 +3,15 @@ from fastapi import APIRouter, Request, HTTPException
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_community.tools import DuckDuckGoSearchRun
 from db import get_database_connection
 from psycopg2.extras import RealDictCursor
 import json
 import os
+from ddgs import DDGS
 from dotenv import load_dotenv
 
 load_dotenv()
 
-search = DuckDuckGoSearchRun()
 router = APIRouter()
 
 def get_llm():
@@ -23,38 +22,70 @@ def get_llm():
         temperature=0.2
     )
 
+
+def run_search(query: str, max_results: int = 5) -> str:
+    """Reliable search using ddgs"""
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=max_results))
+        
+        if not results:
+            return "No relevant search results found."
+        
+        # Extract useful text
+        formatted = []
+        for r in results:
+            title = r.get("title", "")
+            body = r.get("body", "")
+            formatted.append(f"{title}: {body}")
+        
+        return "\n".join(formatted)
+    
+    except Exception as e:
+        return f"Search failed: {str(e)}"
+
+
 def research_question(idea, question, llm):
     """Research a market question using web search and LLM"""
-    try:
-        search_query = f"{idea} market research {question}"
-        search_results = search.run(search_query)
-    except Exception as e:
-        search_results = f"Search results unavailable: {str(e)}"
     
+    # 🔥 MUCH better query (this matters a LOT)
+    search_query = f"{idea} startup market research: {question}"
+    
+    search_results = run_search(search_query)
+
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a market researcher. Answer based on the research data provided.
+        ("system", """You are a market research analyst.
+
 Rules:
-1. Use statistical data where possible
-2. Answer like a market researcher
-3. One paragraph, no formatting
-4. Maximum 70 words"""),
+- Use ONLY the provided research data
+- If data is weak, say "insufficient data"
+- Be specific (numbers, trends, competitors)
+- Max 70 words
+- One paragraph"""),
+
         ("human", """Idea: {idea}
-Research Data: {search_results}
+
+Research Data:
+{search_results}
+
 Question: {question}
 
-Provide a concise answer:""")
+Answer:""")
     ])
     
     chain = prompt | llm | StrOutputParser()
+
     try:
         response = chain.invoke({
             "idea": idea,
-            "search_results": search_results[:2000],
+            "search_results": search_results[:3000],
             "question": question
         })
-        return response
+        return response.strip()
+    
     except Exception as e:
-        return f"Unable to generate response: {str(e)}"
+        return f"LLM error: {str(e)}"
+
 
 async def analyze_market(idea: str, theme: str):
     """Perform full market analysis"""
