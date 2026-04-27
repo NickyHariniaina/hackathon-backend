@@ -6,7 +6,14 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.100",
-    "uvicorn>=0.20",
+    "uvicorn[standard]>=0.20",
     "python-dotenv>=1.0",
     "psycopg>=3",
+    "openai>=1.0",
 ]
+
+[project.scripts]
+hackathon = "app.main:main"
+
+[build-backend]
+build-system = "hatchling.build"
