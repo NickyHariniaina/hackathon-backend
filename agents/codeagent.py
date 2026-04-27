@@ -55,24 +55,54 @@ def get_github_headers():
 
 def parse_repo_url(repo_url):
     """Extract owner and repo from URL like https://github.com/owner/repo"""
-    match = re.search(r"github\.com/([^/]+)/([^/.]+)", repo_url)
+    match = re.search(r"github\.com/([^/]+)/([^/?#]+?)(?:\.git)?(?:/|$|[?#])", repo_url)
     if match:
-        return match.group(1), match.group(2)
+        owner = match.group(1)
+        repo = match.group(2)
+        # Clean up any remaining .git or path components
+        repo = repo.replace(".git", "").split("/")[0]
+        return owner, repo
     return None, None
 
 
-def get_repo_tree(owner, repo, branch="main"):
+def get_default_branch(owner, repo):
+    """Get the default branch of a repository"""
+    session = get_github_session()
+    url = f"https://api.github.com/repos/{owner}/{repo}"
+    response = session.get(url, headers=get_github_headers())
+    if response.status_code == 404:
+        raise ValueError(f"Repository '{owner}/{repo}' not found.")
+    if response.status_code == 403:
+        raise ValueError(f"Access forbidden to '{owner}/{repo}'.")
+    response.raise_for_status()
+    return response.json().get("default_branch", "main")
+
+
+def get_repo_tree(owner, repo, branch=None):
     """Get all files in repository using Git Trees API"""
     session = get_github_session()
+
+    # Get default branch if not specified
+    if branch is None:
+        branch = get_default_branch(owner, repo)
+
     url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
     response = session.get(url, headers=get_github_headers())
-    if response.status_code == 404 and branch == "main":
-        branch = "master"
-        url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
-        response = session.get(url, headers=get_github_headers())
+
+    if response.status_code == 404:
+        # Try common branch names
+        for fallback_branch in ["main", "master", "prod", "develop"]:
+            if fallback_branch == branch:
+                continue
+            url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{fallback_branch}?recursive=1"
+            response = session.get(url, headers=get_github_headers())
+            if response.status_code == 200:
+                branch = fallback_branch
+                break
+
     if response.status_code == 404:
         raise ValueError(
-            f"Repository '{owner}/{repo}' not found. Check the URL and ensure the repo exists."
+            f"Repository '{owner}/{repo}' not found or has no commits. Check the URL and ensure the repo exists."
         )
     if response.status_code == 403:
         raise ValueError(
