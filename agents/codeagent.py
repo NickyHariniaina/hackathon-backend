@@ -21,6 +21,131 @@ import base64
 import re
 from dotenv import load_dotenv
 
+# Project type to relevant paths/extensions mapping
+PROJECT_TYPE_CONFIG = {
+    "NEXT_JS": {
+        "dirs": {
+            "src",
+            "pages",
+            "app",
+            "components",
+            "lib",
+            "utils",
+            "hooks",
+            "public",
+        },
+        "extensions": {".js", ".jsx", ".ts", ".tsx", ".ts", ".css", ".scss"},
+    },
+    "REACT": {
+        "dirs": {"src", "components", "pages", "utils", "hooks", "public"},
+        "extensions": {".js", ".jsx", ".ts", ".tsx", ".css", ".scss"},
+    },
+    "VUE": {
+        "dirs": {"src", "components", "views", "pages", "utils", "public"},
+        "extensions": {".vue", ".js", ".ts", ".jsx", ".tsx", ".css", ".scss"},
+    },
+    "NUXT": {
+        "dirs": {"components", "pages", "layouts", "composables", "utils", "public"},
+        "extensions": {".vue", ".js", ".ts", ".jsx", ".tsx", ".css", ".scss"},
+    },
+    "ANGULAR": {
+        "dirs": {"src", "app", "components", "services", "pages"},
+        "extensions": {".ts", ".js", ".html", ".css", ".scss"},
+    },
+    "SVELTE": {
+        "dirs": {"src", "components", "routes", "lib"},
+        "extensions": {".svelte", ".js", ".ts", ".css"},
+    },
+    "SVELTEKIT": {
+        "dirs": {"src", "lib", "routes", "components"},
+        "extensions": {".svelte", ".js", ".ts", ".css"},
+    },
+    "ASTRO": {
+        "dirs": {"src", "components", "pages", "layouts"},
+        "extensions": {".astro", ".js", ".ts", ".jsx", ".tsx", ".css"},
+    },
+    "REMIX": {
+        "dirs": {"app", "routes", "components", "lib"},
+        "extensions": {".js", ".jsx", ".ts", ".tsx", ".css", ".scss"},
+    },
+    "TAILWIND": {
+        "dirs": {"src", "components", "pages", "public"},
+        "extensions": {".js", ".jsx", ".ts", ".tsx", ".css", ".scss", ".html"},
+    },
+    "NODE_EXPRESS": {
+        "dirs": {"src", "routes", "controllers", "models", "middlewares", "utils"},
+        "extensions": {".js", ".ts", ".json"},
+    },
+    "FASTAPI": {
+        "dirs": {"app", "src", "routes", "api", "models", "schemas"},
+        "extensions": {".py"},
+    },
+    "DJANGO": {
+        "dirs": set(),  # Scan all, filter by extension
+        "extensions": {".py"},
+    },
+    "SPRING_BOOT": {
+        "dirs": {"src/main/java", "src/main/resources", "src/test/java"},
+        "extensions": {".java", ".xml", ".properties", ".yml", ".yaml"},
+    },
+    "GIN": {
+        "dirs": {"cmd", "internal", "pkg", "api"},
+        "extensions": {".go"},
+    },
+    "RAILS": {
+        "dirs": {"app", "lib", "config"},
+        "extensions": {".rb"},
+    },
+    "LARAVEL": {
+        "dirs": {"app", "resources", "routes", "config"},
+        "extensions": {".php", ".blade.php"},
+    },
+    "ACTIX": {
+        "dirs": {"src"},
+        "extensions": {".rs"},
+    },
+    "SWIFT_UI": {
+        "dirs": {"Sources", "App"},
+        "extensions": {".swift"},
+    },
+    "KOTLIN_JETPACK": {
+        "dirs": {"app/src/main/java", "app/src/main/kotlin"},
+        "extensions": {".kt", ".java", ".xml"},
+    },
+    "REACT_NATIVE": {
+        "dirs": {"src", "components", "screens", "navigation", "utils"},
+        "extensions": {".js", ".jsx", ".ts", ".tsx"},
+    },
+    "EXPO": {
+        "dirs": {"app", "src", "components", "screens", "utils"},
+        "extensions": {".js", ".jsx", ".ts", ".tsx"},
+    },
+    "FLUTTER": {
+        "dirs": {"lib", "lib/src"},
+        "extensions": {".dart"},
+    },
+    "DOTNET_MAUI": {
+        "dirs": {"Platforms", "ViewModels", "Views", "Models", "Services"},
+        "extensions": {".cs", ".xaml"},
+    },
+    "IONIC": {
+        "dirs": {"src", "app", "components", "pages", "services"},
+        "extensions": {".ts", ".js", ".html", ".scss"},
+    },
+    "NATIVESCRIPT": {
+        "dirs": {"app", "components", "pages"},
+        "extensions": {".ts", ".js", ".xml", ".css"},
+    },
+    "VANILLA_JS": {
+        "dirs": {"src", "js", "public", "static"},
+        "extensions": {".js", ".html", ".css", ".scss"},
+    },
+    "OTHER": {
+        "dirs": set(),  # Scan all
+        "extensions": set(),  # All extensions
+    },
+}
+
 
 def get_github_session():
     """Create a requests session with retry logic for transient errors"""
@@ -134,28 +259,69 @@ def get_file_content(owner, repo, path, branch="main"):
     return data.get("content", "")
 
 
-def fetch_repo_contents(owner, repo, branch=None):
-    """Fetch all code files from repository, prioritizing source code over config files"""
+def fetch_repo_contents(owner, repo, branch=None, project_type="OTHER"):
+    """Fetch code files from repository, filtered by project_type structure"""
     if branch is None:
         branch = get_default_branch(owner, repo)
 
     tree = get_repo_tree(owner, repo, branch)
 
+    # Get config for this project type
+    config = PROJECT_TYPE_CONFIG.get(project_type, PROJECT_TYPE_CONFIG["OTHER"])
+    relevant_dirs = config["dirs"]
+    relevant_extensions = config["extensions"]
+
     # Source code extensions (higher priority for analysis)
     source_extensions = {
-        ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".cpp", ".c", ".go",
-        ".rs", ".rb", ".php", ".cs", ".swift", ".kt", ".scala",
-        ".html", ".css", ".scss", ".less", ".vue", ".svelte",
+        ".py",
+        ".js",
+        ".ts",
+        ".jsx",
+        ".tsx",
+        ".java",
+        ".cpp",
+        ".c",
+        ".go",
+        ".rs",
+        ".rb",
+        ".php",
+        ".cs",
+        ".swift",
+        ".kt",
+        ".scala",
+        ".html",
+        ".css",
+        ".scss",
+        ".less",
+        ".vue",
+        ".svelte",
+        ".astro",
+        ".dart",
     }
 
     # Config/metadata files (lower priority, still useful for tech stack)
     config_extensions = {
-        ".json", ".yaml", ".yml", ".toml", ".md", ".txt",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".md",
+        ".txt",
     }
 
     skip_dirs = {
-        ".git", "node_modules", "venv", "__pycache__", ".venv",
-        "dist", "build", "target", ".github", "assets", "static", "public",
+        ".git",
+        "node_modules",
+        "venv",
+        "__pycache__",
+        ".venv",
+        "dist",
+        "build",
+        "target",
+        ".github",
+        "assets",
+        "static",
+        "public",
     }
 
     source_files = []
@@ -164,10 +330,32 @@ def fetch_repo_contents(owner, repo, branch=None):
     for item in tree:
         if item.get("type") == "blob":
             path = item.get("path", "")
-            if any(skip_dir in path.split("/") for skip_dir in skip_dirs):
+
+            # Check if directory is in relevant_dirs (if specified)
+            path_parts = path.split("/")
+            is_relevant_dir = True
+            if relevant_dirs:
+                is_relevant_dir = any(part in relevant_dirs for part in path_parts[:-1])
+
+            # Skip if not in relevant directories
+            if relevant_dirs and not is_relevant_dir:
+                continue
+
+            # Skip common excluded directories
+            if any(skip_dir in path_parts for skip_dir in skip_dirs):
                 continue
 
             ext = os.path.splitext(path)[1].lower()
+
+            # Filter by extension if specified
+            if (
+                relevant_extensions
+                and ext not in relevant_extensions
+                and ext not in source_extensions
+                and ext not in config_extensions
+            ):
+                continue
+
             try:
                 content = get_file_content(owner, repo, path, branch)
 
@@ -177,9 +365,13 @@ def fetch_repo_contents(owner, repo, branch=None):
 
                 file_info = {"path": path, "content": content, "type": ext}
 
-                if ext in source_extensions:
+                if ext in source_extensions or (
+                    relevant_extensions and ext in relevant_extensions
+                ):
                     source_files.append(file_info)
-                elif ext in config_extensions or path.endswith(("requirements.txt", "package.json", "Dockerfile")):
+                elif ext in config_extensions or path.endswith(
+                    ("requirements.txt", "package.json", "Dockerfile")
+                ):
                     config_files.append(file_info)
 
             except Exception as e:
@@ -299,11 +491,13 @@ Detailed Assessment:""",
 
     chain = prompt | llm | StrOutputParser()
     try:
-        response = chain.invoke({
-            "context": context[:6000],
-            "question": question,
-            "project_description": project_description or "No description provided"
-        })
+        response = chain.invoke(
+            {
+                "context": context[:6000],
+                "question": question,
+                "project_description": project_description or "No description provided",
+            }
+        )
         return response
     except Exception as e:
         return f"Analysis error: {str(e)}"
@@ -341,16 +535,20 @@ How innovative is this project?""",
 
     chain = prompt | llm | StrOutputParser()
     try:
-        response = chain.invoke({
-            "project_description": project_description[:2000],
-            "hackathon_name": hackathon_name or "Unknown Hackathon"
-        })
+        response = chain.invoke(
+            {
+                "project_description": project_description[:2000],
+                "hackathon_name": hackathon_name or "Unknown Hackathon",
+            }
+        )
         return response
     except Exception as e:
         return f"Innovation assessment error: {str(e)}"
 
 
-def analyze_repository(repo_url: str, questions: list[str]) -> tuple[list[dict], int]:
+def analyze_repository(
+    repo_url: str, questions: list[str], project_type: str = "OTHER"
+) -> tuple[list[dict], int]:
     """Analyze a GitHub repository using the same logic as POST /code-agent/analyze
     Returns: (analysis_results, number_of_files_analyzed)
     """
@@ -358,8 +556,8 @@ def analyze_repository(repo_url: str, questions: list[str]) -> tuple[list[dict],
     if not owner or not repo_name:
         raise ValueError("Invalid repository URL format")
 
-    print(f"Fetching repo: {owner}/{repo_name}")
-    files = fetch_repo_contents(owner, repo_name)
+    print(f"Fetching repo: {owner}/{repo_name} (type: {project_type})")
+    files = fetch_repo_contents(owner, repo_name, project_type=project_type)
     num_files = len(files)
     print(f"Fetched {num_files} files")
 
@@ -405,11 +603,11 @@ def analyze_repository(repo_url: str, questions: list[str]) -> tuple[list[dict],
 def extract_score_from_text(text: str) -> float:
     """Extract a score between 0 and 1 from text response"""
     patterns = [
-        r'(\d+\.?\d*)/10',
-        r'(\d+\.?\d*)%',
-        r'[Ss]core:?\s*(\d+\.?\d*)',
+        r"(\d+\.?\d*)/10",
+        r"(\d+\.?\d*)%",
+        r"[Ss]core:?\s*(\d+\.?\d*)",
     ]
-    
+
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
@@ -417,11 +615,13 @@ def extract_score_from_text(text: str) -> float:
             if value > 1:
                 value = value / 100 if value <= 100 else value / 10
             return min(1.0, max(0.0, value))
-    
+
     return 0.5
 
 
-def save_evaluation(project_id: str, criteria_name: str, score: float, remarks: str, agent_type: str):
+def save_evaluation(
+    project_id: str, criteria_name: str, score: float, remarks: str, agent_type: str
+):
     """Save evaluation to database"""
     conn = get_database_connection()
     cur = conn.cursor()
@@ -430,11 +630,12 @@ def save_evaluation(project_id: str, criteria_name: str, score: float, remarks: 
         INSERT INTO evaluations (project_id, criteria_name, score, remarks, agent_type)
         VALUES (%s, %s, %s, %s, %s)
         """,
-        (project_id, criteria_name, score, remarks, agent_type)
+        (project_id, criteria_name, score, remarks, agent_type),
     )
     conn.commit()
     cur.close()
     conn.close()
+
 
 @router.get("/code-agent")
 async def codeAgent_endpoint():
@@ -460,11 +661,12 @@ async def code_agent_analyze(request: Request):
     try:
         data = await request.json()
         repo_url = data.get("repo_url", "")
+        project_type = data.get("project_type", "OTHER")
 
         if not repo_url:
             raise HTTPException(status_code=400, detail="Repository URL is required")
 
-        print(f"Analyzing repository: {repo_url}")
+        print(f"Analyzing repository: {repo_url} (type: {project_type})")
 
         questions = [
             "What technologies and programming languages are used?",
@@ -473,7 +675,9 @@ async def code_agent_analyze(request: Request):
             "What dependencies and libraries are used?",
         ]
 
-        results, num_files = analyze_repository(repo_url, questions)
+        results, num_files = analyze_repository(
+            repo_url, questions, project_type=project_type
+        )
 
         if num_files == 0:
             return {"message": "No code files found in repository", "analysis": []}
@@ -507,13 +711,21 @@ async def invoke_code_agent(repolink: str, project_id: str, hackathon_id: int = 
         conn = get_database_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        cur.execute("SELECT short_description, long_description, hackathon_id FROM projects WHERE project_id = %s", (project_id,))
+        cur.execute(
+            "SELECT short_description, long_description, hackathon_id, project_type FROM projects WHERE project_id = %s",
+            (project_id,),
+        )
         project = cur.fetchone()
         if project:
             project_description = f"{project.get('short_description', '')} {project.get('long_description', '')}".strip()
+            project_type = project.get("project_type", "OTHER")
+        else:
+            project_type = "OTHER"
 
         if hackathon_id:
-            cur.execute("SELECT criteria, name FROM hackathons WHERE id = %s", (hackathon_id,))
+            cur.execute(
+                "SELECT criteria, name FROM hackathons WHERE id = %s", (hackathon_id,)
+            )
             hackathon = cur.fetchone()
             if hackathon:
                 criteria_text = hackathon.get("criteria") or ""
@@ -524,44 +736,61 @@ async def invoke_code_agent(repolink: str, project_id: str, hackathon_id: int = 
 
         if not repolink or not repolink.startswith("http"):
             print(f"Invalid repo URL: {repolink}")
-            save_evaluation(project_id, "Repo Validation", 0, "Invalid GitHub URL", "code")
+            save_evaluation(
+                project_id, "Repo Validation", 0, "Invalid GitHub URL", "code"
+            )
             return
 
         owner, repo_name = parse_repo_url(repolink)
         if not owner or not repo_name:
             print(f"Invalid repo URL format: {repolink}")
-            save_evaluation(project_id, "Repo Validation", 0, "Invalid repository URL format", "code")
+            save_evaluation(
+                project_id,
+                "Repo Validation",
+                0,
+                "Invalid repository URL format",
+                "code",
+            )
             return
 
         print(f"Fetching {owner}/{repo_name} via GitHub API")
-        files = fetch_repo_contents(owner, repo_name)
+        files = fetch_repo_contents(owner, repo_name, project_type=project_type)
         print(f"Fetched {len(files)} files")
 
         if not files:
-            save_evaluation(project_id, "Code Quality", 0, "No code files found in repository", "code")
+            save_evaluation(
+                project_id,
+                "Code Quality",
+                0,
+                "No code files found in repository",
+                "code",
+            )
             return
 
         documents = []
         for f in files:
             from langchain_core.documents import Document
-            documents.append(Document(
-                page_content=f"File: {f['path']}\n\n{f['content']}",
-                metadata={"source": f["path"]},
-            ))
 
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=300)
+            documents.append(
+                Document(
+                    page_content=f"File: {f['path']}\n\n{f['content']}",
+                    metadata={"source": f["path"]},
+                )
+            )
+
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1500, chunk_overlap=300
+        )
         chunks = text_splitter.split_documents(documents)
 
         embeddings = get_embeddings()
         vectorstore = Chroma.from_documents(
-            documents=chunks,
-            embedding=embeddings,
-            collection_name=f"repo_{project_id}"
+            documents=chunks, embedding=embeddings, collection_name=f"repo_{project_id}"
         )
 
         llm = get_llm()
 
-        criteria_list = [c.strip() for c in criteria_text.split(',') if c.strip()]
+        criteria_list = [c.strip() for c in criteria_text.split(",") if c.strip()]
         if not criteria_list:
             criteria_list = ["Code Quality", "Tech Stack", "Innovation"]
 
@@ -577,9 +806,11 @@ async def invoke_code_agent(repolink: str, project_id: str, hackathon_id: int = 
 
             # Tech Stack - analyze from codebase
             elif name.lower() == "tech stack" or "tech" in name.lower():
-                answer = query_codebase(vectorstore,
+                answer = query_codebase(
+                    vectorstore,
                     "What technologies, frameworks, libraries, and programming languages are used in this project? List all dependencies, frameworks, and tools found in the code.",
-                    llm)
+                    llm,
+                )
                 score = 1.0 if answer and answer != "No code found to analyze" else 0.5
 
             # Code Quality and other criteria - analyze from codebase with criteria context
@@ -594,12 +825,14 @@ async def invoke_code_agent(repolink: str, project_id: str, hackathon_id: int = 
 
 Context: This project is part of the "{hackathon_name}" hackathon. Assess whether the code meets expectations for {name}.
 If the project does not follow good practices for {name}, specify exactly what is missing or poorly implemented.""",
-                    project_description
+                    project_description,
                 )
                 score = extract_score_from_text(answer)
 
             save_evaluation(project_id, name, score, answer, "code")
-            results.append({"name": name, "score": score, "answer": answer[:500] if answer else ""})
+            results.append(
+                {"name": name, "score": score, "answer": answer[:500] if answer else ""}
+            )
 
         conn = get_database_connection()
         cur = conn.cursor()
@@ -619,6 +852,7 @@ If the project does not follow good practices for {name}, specify exactly what i
     except Exception as e:
         print(f"Code Agent Error: {str(e)}")
         import traceback
+
         traceback.print_exc()
         # Ensure DB connections are closed on error
         try:
@@ -637,12 +871,15 @@ def generate_overall_project_score(project_id: str):
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
         # Get project details
-        cur.execute("""
+        cur.execute(
+            """
             SELECT p.*, h.name as hackathon_name, h.theme as hackathon_theme, h.criteria
             FROM projects p
             LEFT JOIN hackathons h ON p.hackathon_id = h.id
             WHERE p.project_id = %s
-        """, (project_id,))
+        """,
+            (project_id,),
+        )
         project = cur.fetchone()
 
         if not project:
@@ -653,6 +890,7 @@ def generate_overall_project_score(project_id: str):
 
         # Parse JSONB fields
         import json
+
         code_analysis = project.get("code_agent_analysis") or []
         market_analysis = project.get("market_agent_analysis") or []
 
@@ -669,14 +907,17 @@ def generate_overall_project_score(project_id: str):
             hackathon_theme=project.get("hackathon_theme", ""),
             criteria=project.get("criteria", ""),
             code_analysis=code_analysis,
-            market_analysis=market_analysis
+            market_analysis=market_analysis,
         )
 
         # Save to database
-        cur.execute("""
+        cur.execute(
+            """
             UPDATE projects SET overall_score = %s, score_explanation = %s
             WHERE project_id = %s
-        """, (score, explanation, project_id))
+        """,
+            (score, explanation, project_id),
+        )
 
         conn.commit()
         cur.close()
@@ -687,4 +928,5 @@ def generate_overall_project_score(project_id: str):
     except Exception as e:
         print(f"Error generating overall score: {str(e)}")
         import traceback
+
         traceback.print_exc()
