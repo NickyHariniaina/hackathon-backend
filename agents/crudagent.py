@@ -291,6 +291,8 @@ async def get_project(project_id: str):
         project["code_score"] = scores["code_score"]
         project["market_score"] = scores["market_score"]
         project["total_score"] = scores["total_score"]
+        project["code_evaluation"] = scores["code_result"]
+        project["market_evaluation"] = scores["market_result"]
     
     return {"message": "successful", "project": project}
 
