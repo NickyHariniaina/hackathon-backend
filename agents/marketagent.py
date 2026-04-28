@@ -14,17 +14,17 @@ load_dotenv()
 
 router = APIRouter()
 
+
 def get_llm():
     return ChatOpenAI(
         model=os.getenv("FREE_LLM_MODEL", "liquid/lfm-2.5-1.2b-thinking:free"),
         base_url="https://openrouter.ai/api/v1",
         api_key=os.getenv("OPENROUTER_API_KEY"),
-        temperature=0.2
+        temperature=0
     )
 
 
 def run_search(query: str, max_results: int = 5) -> str:
-    """Reliable search using ddgs"""
     try:
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=max_results))
@@ -32,7 +32,6 @@ def run_search(query: str, max_results: int = 5) -> str:
         if not results:
             return "No relevant search results found."
         
-        # Extract useful text
         formatted = []
         for r in results:
             title = r.get("title", "")
@@ -45,111 +44,130 @@ def run_search(query: str, max_results: int = 5) -> str:
         return f"Search failed: {str(e)}"
 
 
-def research_question(idea, question, llm):
-    """Research a market question using web search and LLM"""
+def research_topic(query: str, llm) -> str:
+    """Research a topic using web search"""
+    search_results = run_search(query)
     
-    # 🔥 MUCH better query (this matters a LOT)
-    search_query = f"{idea} startup market research: {question}"
-    
-    search_results = run_search(search_query)
-
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a market research analyst.
-
-Rules:
-- Use ONLY the provided research data
-- If data is weak, say "insufficient data"
-- Be specific (numbers, trends, competitors)
-- Max 70 words
-- One paragraph"""),
-
-        ("human", """Idea: {idea}
-
-Research Data:
-{search_results}
-
-Question: {question}
-
-Answer:""")
+        ("system", "Tu es un analyste market research. Réponds en 2-3 phrases basées UNIQUEMENT sur les données fournies. Si insuffisant, dis 'Données insuffisantes pour répondre'."),
+        ("human", "Données:\n{search_results}\n\nQuestion: {query}\n\nRéponse:")
     ])
     
     chain = prompt | llm | StrOutputParser()
-
-    try:
-        response = chain.invoke({
-            "idea": idea,
-            "search_results": search_results[:3000],
-            "question": question
-        })
-        return response.strip()
     
+    try:
+        return chain.invoke({"search_results": search_results[:3000], "query": query}).strip()
     except Exception as e:
-        return f"LLM error: {str(e)}"
+        return f"Error: {str(e)}"
 
 
-async def analyze_market(idea: str, theme: str):
-    """Perform full market analysis"""
-    llm = get_llm()
+def save_evaluation(project_id: str, agent_type: str, score: float, result_json: dict):
+    """Save evaluation to database"""
+    conn = get_database_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO evaluations (project_id, agent_type, score, result_json)
+           VALUES (%s, %s, %s, %s)
+           ON CONFLICT (project_id, agent_type) DO UPDATE
+           SET score = EXCLUDED.score, result_json = EXCLUDED.result_json, created_at = CURRENT_TIMESTAMP""",
+        (project_id, agent_type, score, json.dumps(result_json))
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def get_hackathon_info(hackathon_id: int) -> dict:
+    """Get hackathon details"""
+    if not hackathon_id:
+        return {"name": "General", "theme": "", "criteria": "Market Potential, Innovation, Viability"}
     
-    marketQuestions = [
-        "Who is the target audience of this idea?",
-        "What is the market potential and size?",
-        "What are the main competitors?",
-        "What are the potential pitfalls?",
-        "What is the revenue model potential?"
-    ]
+    conn = get_database_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT name, theme, criteria FROM hackathons WHERE id = %s", (hackathon_id,))
+    hackathon = cur.fetchone()
+    cur.close()
+    conn.close()
     
-    results = []
-    for question in marketQuestions:
-        print(f"Researching: {question}")
-        answer = research_question(idea, question, llm)
-        results.append({
-            "question": question,
-            "answer": answer
-        })
-        print(f"Answer: {answer[:100]}...")
-    
-    # Theme matching
-    theme_prompt = ChatPromptTemplate.from_messages([
-        ("system", "Match this idea to one theme. Return ONLY the theme name."),
-        ("human", "Themes: {themes}\nIdea: {idea}\nMatched Theme:")
-    ])
-    
-    theme_chain = theme_prompt | llm | StrOutputParser()
+    if hackathon:
+        return {
+            "name": hackathon.get("name") or "General",
+            "theme": hackathon.get("theme") or "",
+            "criteria": hackathon.get("criteria") or "Market Potential, Innovation, Viability"
+        }
+    return {"name": "General", "theme": "", "criteria": "Market Potential, Innovation, Viability"}
+
+
+async def invoke_market_agent(project_id: str, idea: str, hackathon_id: int = None):
+    """Background task for automatic market analysis"""
     try:
-        matched_theme = theme_chain.invoke({
-            "themes": theme,
-            "idea": idea
-        })
-        matched_theme = matched_theme.strip().split('\n')[0]  # Take first line only
-    except:
-        matched_theme = "General"
-    
-    return {
-        "analysis": results,
-        "matched_theme": matched_theme
-    }
+        hackathon = get_hackathon_info(hackathon_id)
+        
+        if not idea or not idea.strip():
+            print(f"Empty idea for project {project_id}")
+            save_evaluation(project_id, "market", 0, {"error": "Empty project description", "score": 0})
+            return
+        
+        print(f"Researching market for: {idea[:100]}...")
+        
+        llm = get_llm()
+        
+        research_queries = [
+            f"{idea} market size and potential",
+            f"{idea} main competitors and market landscape",
+            f"{idea} target audience and use cases"
+        ]
+        
+        research_contexts = []
+        for query in research_queries:
+            print(f"Researching: {query[:80]}...")
+            result = run_search(query)
+            research_contexts.append(result[:1500])
+        
+        market_context = "\n\n".join(research_contexts)
+        
+        evaluation_prompt = f"""Évalue ce projet pour le hackathon "{hackathon['name']}".
+Thème: {hackathon['theme']}
+Critères: {hackathon['criteria']}
+
+Idée du projet: {idea}
+
+Contexte marché:
+{market_context}
+
+Analyse le marché et donne un score 0-100 avec justification. Réponds UNIQUEMENT en JSON valide:
+{{"score": <0-100>, "summary": "<résumé 1-2 phrases>", "strengths": ["<point fort>", ...], "weaknesses": ["<point faible>", ...], "criterion_scores": {{"<critère>": <score 0-100>, ...}}}}"""
+
+        chain = ChatPromptTemplate.from_messages([
+            ("system", "Tu es un analyste marché expert. Réponds uniquement en JSON valide, sans texte additionnel."),
+            ("human", "{evaluation_prompt}")
+        ]) | llm | StrOutputParser()
+        
+        result = chain.invoke({"evaluation_prompt": evaluation_prompt})
+        print(f"Raw result: {result[:200]}...")
+        
+        try:
+            result_json = json.loads(result)
+            score = float(result_json.get("score", 50))
+        except (json.JSONDecodeError, TypeError):
+            print(f"Failed to parse result: {result[:200]}")
+            score = 50
+            result_json = {"summary": result, "score": score, "error": "Parse error"}
+        
+        save_evaluation(project_id, "market", score, result_json)
+        print(f"Market Agent: Saved evaluation with score {score} for project {project_id}")
+        
+    except Exception as e:
+        print(f"Market Agent Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        save_evaluation(project_id, "market", 0, {"error": str(e), "score": 0})
+
 
 @router.get("/market-agent")
 async def marketAgent_endpoint():
-    """Test endpoint - returns available functionality"""
-    return {
-        "message": "Market Agent is running",
-        "capabilities": [
-            "Market analysis with web research",
-            "Target audience identification",
-            "Competitor analysis",
-            "Theme matching",
-            "Revenue potential analysis"
-        ],
-        "usage": {
-            "endpoint": "POST /api/market-agent/analyze",
-            "body": {
-                "idea": "Your project idea description",
-                "theme": "Comma-separated list of themes"
-            }
-        }
-    }
+    return {"message": "Market Agent is running", "capabilities": ["Market analysis with web research", "Score 0-100 evaluation"]}
+
 
 @router.post("/market-agent/analyze")
 async def market_agent_analyze(request: Request):
@@ -157,67 +175,61 @@ async def market_agent_analyze(request: Request):
     try:
         data = await request.json()
         idea = data.get("idea", "")
-        theme = data.get("theme", "")
+        hackathon_id = data.get("hackathon_id")
         
         if not idea:
             raise HTTPException(status_code=400, detail="Idea is required")
         
-        if not theme:
-            # Get theme from database if not provided
-            try:
-                conn = get_database_connection()
-                cur = conn.cursor(cursor_factory=RealDictCursor)
-                cur.execute("SELECT theme FROM hackathons LIMIT 1")
-                hackathon = cur.fetchone()
-                cur.close()
-                conn.close()
-                theme = hackathon["theme"] if hackathon else "General"
-            except:
-                theme = "General"
+        hackathon = get_hackathon_info(hackathon_id)
         
         print(f"Analyzing idea: {idea}")
-        print(f"Themes: {theme}")
         
-        result = await analyze_market(idea, theme)
+        llm = get_llm()
+        
+        research_queries = [
+            f"{idea} market size and potential",
+            f"{idea} main competitors",
+            f"{idea} target audience"
+        ]
+        
+        research_contexts = []
+        for query in research_queries:
+            result = run_search(query)
+            research_contexts.append(result[:1500])
+        
+        market_context = "\n\n".join(research_contexts)
+        
+        evaluation_prompt = f"""Évalue ce projet pour le hackathon "{hackathon['name']}".
+Thème: {hackathon['theme']}
+Critères: {hackathon['criteria']}
+
+Idée: {idea}
+
+Contexte marché:
+{market_context}
+
+Analyse et donne un score 0-100. JSON valide uniquement:
+{{"score": <0-100>, "summary": "<résumé>", "strengths": [...], "weaknesses": [...], "criterion_scores": {{"<critère>": <score>, ...}}}}"""
+
+        chain = ChatPromptTemplate.from_messages([
+            ("system", "Tu es un analyste marché expert. Réponds uniquement en JSON valide."),
+            ("human", "{evaluation_prompt}")
+        ]) | llm | StrOutputParser()
+        
+        result = chain.invoke({"evaluation_prompt": evaluation_prompt})
+        
+        try:
+            result_json = json.loads(result)
+            score = result_json.get("score", 50)
+        except:
+            score = 50
+            result_json = {"summary": result, "score": score}
         
         return {
             "message": "Market analysis complete",
             "idea": idea,
-            "matched_theme": result["matched_theme"],
-            "analysis": result["analysis"]
+            "evaluation": result_json
         }
-    
+        
     except Exception as e:
-        print(f"Error in market analysis: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-async def invoke_market_agent(project_id: str, idea: str, hackathon_id: int = None):
-    """Background task for automatic project analysis"""
-    try:
-        criteria_text = ""
-        if hackathon_id:
-            conn = get_database_connection()
-            cur = conn.cursor(cursor_factory=RealDictCursor)
-            cur.execute("SELECT criteria FROM hackathons WHERE id = %s", (hackathon_id,))
-            hackathon = cur.fetchone()
-            if hackathon:
-                criteria_text = hackathon["criteria"] or ""
-            cur.close()
-            conn.close()
-        
-        result = await analyze_market(idea, "")
-        
-        conn = get_database_connection()
-        cur = conn.cursor()
-        cur.execute(
-            "UPDATE projects SET market_agent_analysis = %s WHERE project_id = %s",
-            (json.dumps(result["analysis"]), project_id)
-        )
-        conn.commit()
-        cur.close()
-        conn.close()
-        
-        print(f"Market Agent: Analysis complete for project {project_id}")
-        
-    except Exception as e:
-        print(f"Market Agent Error: {str(e)}")
