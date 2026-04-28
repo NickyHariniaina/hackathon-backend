@@ -27,8 +27,91 @@ def get_llm():
         model=os.getenv("FREE_LLM_MODEL", "liquid/lfm-2.5-1.2b-thinking:free"),
         base_url="https://openrouter.ai/api/v1",
         api_key=os.getenv("OPENROUTER_API_KEY"),
-        temperature=0
+        temperature=0.2
     )
+
+
+def generate_overall_score(project_id: str, short_description: str, long_description: str,
+                           hackathon_name: str, hackathon_theme: str, criteria: str,
+                           code_analysis: list, market_analysis: list) -> tuple[float, str]:
+    """Generate overall project score using LLM based on all factors"""
+    llm = get_llm()
+
+    code_summary = "\n".join([f"- {item.get('name', 'Criteria')}: {item.get('answer', 'N/A')[:200]}"
+                               for item in code_analysis]) if code_analysis else "No code analysis available"
+
+    market_summary = "\n".join([f"- {item.get('question', 'Q')}: {item.get('answer', 'N/A')[:200]}"
+                                for item in market_analysis]) if market_analysis else "No market analysis available"
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are a hackathon judge evaluating projects.
+Rate the project from 0-10 based on ALL these factors:
+1. Theme alignment - Does it fit the hackathon theme?
+2. Code quality - From the code analysis
+3. Market potential - From the market analysis
+4. Hackathon criteria - How well does it meet each criterion?
+
+Return JSON format:
+{{"score": <0-10>, "reasons": ["reason1", "reason2", "reason3"]}}
+
+Keep reasons short (5-10 words each). Max 3 reasons."""),
+
+        ("human", """Project: {short_desc}
+{long_desc}
+
+Hackathon: {hackathon_name}
+Theme: {hackathon_theme}
+Criteria: {criteria}
+
+CODE ANALYSIS:
+{code_summary}
+
+MARKET ANALYSIS:
+{market_summary}
+
+Evaluate and return JSON:""")
+    ])
+
+    chain = prompt | llm | StrOutputParser()
+
+    try:
+        import json
+        import re
+        response = chain.invoke({
+            "short_desc": short_description[:500],
+            "long_desc": long_description[:1000],
+            "hackathon_name": hackathon_name,
+            "hackathon_theme": hackathon_theme,
+            "criteria": criteria or "General evaluation",
+            "code_summary": code_summary,
+            "market_summary": market_summary
+        })
+
+        # Parse JSON response - try multiple patterns
+        json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
+        if not json_match:
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+
+        if json_match:
+            try:
+                result = json.loads(json_match.group())
+                score = float(result.get("score", 5)) / 10  # Convert 0-10 to 0-1
+                reasons = result.get("reasons", ["No specific reasons provided"])
+                if not isinstance(reasons, list):
+                    reasons = [str(reasons)]
+                explanation = "\n".join([f"- {r}" for r in reasons[:3]])
+                return min(1.0, max(0.0, score)), explanation
+            except json.JSONDecodeError:
+                # Fallback: extract score from text
+                score_match = re.search(r'"?score"?\s*[:=]\s*(\d+(?:\.\d+)?)', response)
+                if score_match:
+                    score = float(score_match.group(1)) / 10
+                    return min(1.0, max(0.0, score)), "- Score extracted from response"
+
+    except Exception as e:
+        print(f"Score generation error: {e}")
+
+    return 0.5, "- Unable to generate detailed score explanation"
 
 def get_embeddings():
     return HuggingFaceEmbeddings(
@@ -75,24 +158,24 @@ def crudAgent_endpoint():
 @router.post("/create-project", tags=["Projects"], summary="Create project and trigger AI analysis")
 async def create_project(request: Request):
     """Create a new project. Triggers code and market analysis asynchronously.
-    
-    Body fields: shortDescription, longDescription, githubLink, theme, hackathonId (optional)
+
+    Body fields: shortDescription, longDescription, githubLink, demoLink (optional), theme, hackathonId (optional)
     """
     data = await request.json()
     print(data)
-    
+
     project_id = str(uuid.uuid4())
     hackathon_id = data.get("hackathonId")
-    
+
     conn = get_database_connection()
     cur = conn.cursor()
     cur.execute(
         """
-        INSERT INTO projects (project_id, hackathon_id, short_description, long_description, github_link, theme, is_reviewed)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO projects (project_id, hackathon_id, short_description, long_description, github_link, demo_link, theme, is_reviewed)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """,
-        (project_id, hackathon_id, data.get("shortDescription", ""), data.get("longDescription", ""), 
-         data.get("githubLink", ""), data.get("theme", ""), False)
+        (project_id, hackathon_id, data.get("shortDescription", ""), data.get("longDescription", ""),
+         data.get("githubLink", ""), data.get("demoLink", None), data.get("theme", ""), False)
     )
     conn.commit()
     cur.close()
@@ -192,89 +275,111 @@ async def get_hackathon_projects(hackathon_id: int):
     projects = cur.fetchall()
     cur.close()
     conn.close()
-    
+
     result = []
     for p in projects:
         p["_id"] = str(p["id"])
         del p["id"]
         if p.get("created_at"):
             p["created_at"] = p["created_at"].isoformat()
+        # Ensure demo_link is included (nullable)
+        if "demo_link" not in p:
+            p["demo_link"] = None
         result.append(p)
-    
+
     return {"message": "successful", "projects": result}
 
 @router.get("/get-project-score/{project_id}", tags=["Scoring"], summary="Get project score")
 async def get_project_score(project_id: str):
-    """Get total score and evaluation details for a project.
-    
-    Returns average of all criterion scores."""
+    """Get overall project score generated by AI based on all factors.
+
+    Returns LLM-generated score with explanation of why that score was given.
+    """
     conn = get_database_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    
+
     cur.execute("""
-        SELECT p.*, h.criteria, h.name as hackathon_name 
-        FROM projects p 
-        LEFT JOIN hackathons h ON p.hackathon_id = h.id 
+        SELECT p.project_id, p.short_description, p.overall_score, p.score_explanation,
+               h.name as hackathon_name, h.theme, h.criteria
+        FROM projects p
+        LEFT JOIN hackathons h ON p.hackathon_id = h.id
         WHERE p.project_id = %s
     """, (project_id,))
     project = cur.fetchone()
-    
+
     if not project:
         cur.close()
         conn.close()
         return {"message": "error", "error": "Project not found"}
-    
-    cur.execute("SELECT criteria_name, score, remarks FROM evaluations WHERE project_id = %s", (project_id,))
-    evaluations = cur.fetchall()
+
+    # If score hasn't been generated yet, trigger generation
+    if project.get("overall_score") is None:
+        cur.close()
+        conn.close()
+        from agents.codeagent import generate_overall_project_score
+        generate_overall_project_score(project_id)
+
+        # Re-fetch the project with score
+        conn = get_database_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT p.project_id, p.overall_score, p.score_explanation,
+                   h.name as hackathon_name
+            FROM projects p
+            LEFT JOIN hackathons h ON p.hackathon_id = h.id
+            WHERE p.project_id = %s
+        """, (project_id,))
+        project = cur.fetchone()
+
     cur.close()
     conn.close()
-    
-    total_score = sum(float(e["score"]) for e in evaluations) / len(evaluations) if evaluations else 0
-    
-    scores = {}
-    for eval in evaluations:
-        scores[eval["criteria_name"]] = {"score": float(eval["score"]), "remarks": eval["remarks"]}
-    
+
+    overall_score = float(project.get("overall_score", 0)) if project.get("overall_score") else 0
+
     return {
         "message": "successful",
         "project_id": project_id,
         "hackathon_name": project.get("hackathon_name"),
-        "total_score": round(total_score, 2),
-        "scores": scores
+        "overall_score": round(overall_score * 10, 1),
+        "score_explanation": project.get("score_explanation", "Score not yet generated"),
+        "score_breakdown": {
+            "raw_score": overall_score,
+            "out_of_10": round(overall_score * 10, 1)
+        }
     }
 
 @router.get("/get-hackathon-leaderboard/{hackathon_id}", tags=["Scoring"], summary="Get hackathon leaderboard")
 async def get_hackathon_leaderboard(hackathon_id: int):
-    """Get ranked projects for a hackathon based on their scores."""
+    """Get ranked projects for a hackathon based on their overall scores."""
     conn = get_database_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    
-    cur.execute("SELECT criteria, name FROM hackathons WHERE id = %s", (hackathon_id,))
+
+    cur.execute("SELECT name FROM hackathons WHERE id = %s", (hackathon_id,))
     hackathon = cur.fetchone()
     if not hackathon:
         cur.close()
         conn.close()
         return {"message": "error", "error": "Hackathon not found"}
-    
-    cur.execute("SELECT project_id, short_description, github_link FROM projects WHERE hackathon_id = %s", (hackathon_id,))
+
+    cur.execute("""SELECT project_id, short_description, github_link, overall_score, score_explanation
+                  FROM projects WHERE hackathon_id = %s""", (hackathon_id,))
     projects = cur.fetchall()
-    
+
     ranked = []
     for proj in projects:
-        cur.execute("SELECT criteria_name, score FROM evaluations WHERE project_id = %s", (proj["project_id"],))
-        evals = cur.fetchall()
-        total_score = sum(float(e["score"]) for e in evals) / len(evals) if evals else 0
+        score = float(proj.get("overall_score", 0)) if proj.get("overall_score") else 0
         ranked.append({
             "project_id": proj["project_id"],
             "short_description": proj["short_description"],
             "github_link": proj["github_link"],
-            "score": round(total_score, 2)
+            "score": round(score * 10, 1),  # Convert to 0-10 scale
+            "score_explanation": proj.get("score_explanation", "")[:100]
         })
-    
+
     cur.close()
     conn.close()
     ranked.sort(key=lambda x: x["score"], reverse=True)
-    
+
     return {"message": "successful", "hackathon_name": hackathon["name"], "leaderboard": ranked}
 
 @router.get("/get-project/{project_id}")
@@ -285,13 +390,16 @@ async def get_project(project_id: str):
     project = cur.fetchone()
     cur.close()
     conn.close()
-    
+
     if project:
         project["_id"] = str(project["id"])
         del project["id"]
         if "created_at" in project and project["created_at"]:
             project["created_at"] = project["created_at"].isoformat()
-    
+        # Ensure demo_link is included (nullable)
+        if "demo_link" not in project:
+            project["demo_link"] = None
+
     return {"message": "successful", "project": project}
 
 @router.get("/get-all")
@@ -302,15 +410,18 @@ async def get_all_projects():
     projects = cur.fetchall()
     cur.close()
     conn.close()
-    
+
     final = []
     for project in projects:
         project["_id"] = str(project["id"])
         del project["id"]
         if "created_at" in project and project["created_at"]:
             project["created_at"] = project["created_at"].isoformat()
+        # Ensure demo_link is included (nullable)
+        if "demo_link" not in project:
+            project["demo_link"] = None
         final.append(project)
-    
+
     return {"message": "successful", "projects": final}
 
 @router.post("/review")

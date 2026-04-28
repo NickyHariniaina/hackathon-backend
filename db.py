@@ -28,7 +28,7 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS projects (
             id SERIAL PRIMARY KEY,
@@ -37,14 +37,17 @@ def init_db():
             short_description TEXT DEFAULT '',
             long_description TEXT DEFAULT '',
             github_link TEXT DEFAULT '',
+            demo_link TEXT DEFAULT NULL,
             theme TEXT DEFAULT '',
             is_reviewed BOOLEAN DEFAULT FALSE,
             code_agent_analysis JSONB DEFAULT '[]'::jsonb,
             market_agent_analysis JSONB DEFAULT '[]'::jsonb,
+            overall_score DECIMAL(3,2) DEFAULT NULL,
+            score_explanation TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS evaluations (
             id SERIAL PRIMARY KEY,
@@ -56,11 +59,22 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_projects_hackathon_id ON projects(hackathon_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_projects_project_id ON projects(project_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_evaluations_project_id ON evaluations(project_id)")
-    
+
+    # Add new columns if they don't exist
+    try:
+        cur.execute("ALTER TABLE projects ADD COLUMN overall_score DECIMAL(3,2) DEFAULT NULL")
+    except:
+        pass
+    try:
+        cur.execute("ALTER TABLE projects ADD COLUMN score_explanation TEXT DEFAULT ''")
+    except:
+        pass
+    try:
+        cur.execute("ALTER TABLE projects ADD COLUMN demo_link TEXT DEFAULT NULL")
+    except:
+        pass
+
+
     conn.commit()
     cur.close()
     conn.close()

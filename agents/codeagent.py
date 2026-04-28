@@ -611,6 +611,9 @@ If the project does not follow good practices for {name}, specify exactly what i
         cur.close()
         conn.close()
 
+        # Generate overall score after code analysis
+        generate_overall_project_score(project_id)
+
         print(f"Code Agent: Analysis complete for project {project_id}")
 
     except Exception as e:
@@ -623,3 +626,65 @@ If the project does not follow good practices for {name}, specify exactly what i
             conn.close()
         except:
             pass
+
+
+def generate_overall_project_score(project_id: str):
+    """Generate and save overall project score based on all analyses"""
+    try:
+        from agents.crudagent import generate_overall_score
+
+        conn = get_database_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # Get project details
+        cur.execute("""
+            SELECT p.*, h.name as hackathon_name, h.theme as hackathon_theme, h.criteria
+            FROM projects p
+            LEFT JOIN hackathons h ON p.hackathon_id = h.id
+            WHERE p.project_id = %s
+        """, (project_id,))
+        project = cur.fetchone()
+
+        if not project:
+            print(f"Project {project_id} not found for scoring")
+            cur.close()
+            conn.close()
+            return
+
+        # Parse JSONB fields
+        import json
+        code_analysis = project.get("code_agent_analysis") or []
+        market_analysis = project.get("market_agent_analysis") or []
+
+        if isinstance(code_analysis, str):
+            code_analysis = json.loads(code_analysis)
+        if isinstance(market_analysis, str):
+            market_analysis = json.loads(market_analysis)
+
+        score, explanation = generate_overall_score(
+            project_id=project_id,
+            short_description=project.get("short_description", ""),
+            long_description=project.get("long_description", ""),
+            hackathon_name=project.get("hackathon_name", ""),
+            hackathon_theme=project.get("hackathon_theme", ""),
+            criteria=project.get("criteria", ""),
+            code_analysis=code_analysis,
+            market_analysis=market_analysis
+        )
+
+        # Save to database
+        cur.execute("""
+            UPDATE projects SET overall_score = %s, score_explanation = %s
+            WHERE project_id = %s
+        """, (score, explanation, project_id))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        print(f"Overall score generated for project {project_id}: {score}")
+
+    except Exception as e:
+        print(f"Error generating overall score: {str(e)}")
+        import traceback
+        traceback.print_exc()

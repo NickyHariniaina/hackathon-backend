@@ -312,16 +312,16 @@ async def invoke_market_agent(project_id: str, idea: str, github_link: str = Non
                 criteria_text = hackathon["criteria"] or ""
             cur.close()
             conn.close()
-        
+
         readme_content = ""
         if github_link:
             owner, repo = parse_repo_url(github_link)
             if owner and repo:
                 readme_content = fetch_readme(owner, repo)
                 print(f"Market Agent: Fetched README ({len(readme_content)} chars) from {owner}/{repo}")
-        
+
         result = await analyze_market(idea, "", readme_content)
-        
+
         conn = get_database_connection()
         cur = conn.cursor()
         cur.execute(
@@ -331,8 +331,12 @@ async def invoke_market_agent(project_id: str, idea: str, github_link: str = Non
         conn.commit()
         cur.close()
         conn.close()
-        
+
+        # Generate overall score after market analysis
+        from agents.codeagent import generate_overall_project_score
+        generate_overall_project_score(project_id)
+
         print(f"Market Agent: Analysis complete for project {project_id}")
-        
+
     except Exception as e:
         print(f"Market Agent Error: {str(e)}")
