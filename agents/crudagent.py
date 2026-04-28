@@ -373,6 +373,9 @@ async def get_hackathon_projects(hackathon_id: int):
         # Ensure demo_link is included (nullable)
         if "demo_link" not in p:
             p["demo_link"] = None
+        # Ensure project_type is included
+        if "project_type" not in p:
+            p["project_type"] = "OTHER"
         result.append(p)
 
     return {"message": "successful", "projects": result}
@@ -516,6 +519,9 @@ async def get_project(project_id: str):
         # Ensure demo_link is included (nullable)
         if "demo_link" not in project:
             project["demo_link"] = None
+        # Ensure project_type is included
+        if "project_type" not in project:
+            project["project_type"] = "OTHER"
 
     return {"message": "successful", "project": project}
 
@@ -538,6 +544,9 @@ async def get_all_projects():
         # Ensure demo_link is included (nullable)
         if "demo_link" not in project:
             project["demo_link"] = None
+        # Ensure project_type is included
+        if "project_type" not in project:
+            project["project_type"] = "OTHER"
         final.append(project)
 
     return {"message": "successful", "projects": final}
