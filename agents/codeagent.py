@@ -135,76 +135,58 @@ def get_file_content(owner, repo, path, branch="main"):
 
 
 def fetch_repo_contents(owner, repo, branch=None):
-    """Fetch all code files from repository"""
+    """Fetch all code files from repository, prioritizing source code over config files"""
     if branch is None:
         branch = get_default_branch(owner, repo)
-    
+
     tree = get_repo_tree(owner, repo, branch)
-    code_extensions = {
-        ".py",
-        ".js",
-        ".ts",
-        ".jsx",
-        ".tsx",
-        ".java",
-        ".cpp",
-        ".c",
-        ".go",
-        ".rs",
-        ".rb",
-        ".php",
-        ".cs",
-        ".swift",
-        ".kt",
-        ".scala",
-        ".sh",
-        ".bash",
-        ".html",
-        ".css",
-        ".scss",
-        ".less",
-        ".vue",
-        ".svelte",
-        ".json",
-        ".yaml",
-        ".yml",
-        ".toml",
-        ".md",
-        ".txt",
-    }
-    skip_dirs = {
-        ".git",
-        "node_modules",
-        "venv",
-        "__pycache__",
-        ".venv",
-        "dist",
-        "build",
-        "target",
-        ".github",
-        "assets",
-        "static",
-        "public",
+
+    # Source code extensions (higher priority for analysis)
+    source_extensions = {
+        ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".cpp", ".c", ".go",
+        ".rs", ".rb", ".php", ".cs", ".swift", ".kt", ".scala",
+        ".html", ".css", ".scss", ".less", ".vue", ".svelte",
     }
 
-    files = []
+    # Config/metadata files (lower priority, still useful for tech stack)
+    config_extensions = {
+        ".json", ".yaml", ".yml", ".toml", ".md", ".txt",
+    }
+
+    skip_dirs = {
+        ".git", "node_modules", "venv", "__pycache__", ".venv",
+        "dist", "build", "target", ".github", "assets", "static", "public",
+    }
+
+    source_files = []
+    config_files = []
+
     for item in tree:
         if item.get("type") == "blob":
             path = item.get("path", "")
             if any(skip_dir in path.split("/") for skip_dir in skip_dirs):
                 continue
+
             ext = os.path.splitext(path)[1].lower()
-            if (
-                ext in code_extensions
-                or path.endswith("requirements.txt")
-                or path.endswith("package.json")
-                or path.endswith("Dockerfile")
-            ):
-                try:
-                    content = get_file_content(owner, repo, path, branch)
-                    files.append({"path": path, "content": content, "type": ext})
-                except Exception as e:
-                    print(f"Skipping {path}: {e}")
+            try:
+                content = get_file_content(owner, repo, path, branch)
+
+                # Skip very large files
+                if len(content) > 50000:
+                    continue
+
+                file_info = {"path": path, "content": content, "type": ext}
+
+                if ext in source_extensions:
+                    source_files.append(file_info)
+                elif ext in config_extensions or path.endswith(("requirements.txt", "package.json", "Dockerfile")):
+                    config_files.append(file_info)
+
+            except Exception as e:
+                print(f"Skipping {path}: {e}")
+
+    # Prioritize source files, limit config files
+    files = source_files[:50] + config_files[:10]
     return files
 
 
@@ -229,7 +211,7 @@ def query_codebase(vectorstore, question, llm):
     """Query the codebase with a specific question"""
     if vectorstore is None:
         return "No code found to analyze"
-    
+
     retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
 
     try:
@@ -268,6 +250,104 @@ Answer:""",
         return response
     except Exception as e:
         return f"Analysis error: {str(e)}"
+
+
+def query_codebase_detailed(vectorstore, llm, question, project_description=""):
+    """Query the codebase with detailed analysis, using more context"""
+    if vectorstore is None:
+        return "No code found to analyze"
+
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
+
+    try:
+        relevant_docs = retriever.invoke(question)
+    except AttributeError:
+        try:
+            relevant_docs = retriever.get_relevant_documents(question)
+        except:
+            return "Unable to retrieve code context"
+
+    context = "\n\n".join([doc.page_content for doc in relevant_docs])
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """You are a senior software engineer evaluating a hackathon project.
+Analyze the actual code provided below. Do NOT just summarize package.json or dependency files.
+Base your evaluation on the source code structure, patterns, and implementation quality.
+
+If evaluating code quality: look for readability, modularity, error handling, naming conventions, and best practices.
+If a specific criterion is requested: explicitly state whether the project meets it or not, and why.
+
+Be specific and provide concrete observations from the code. Max 200 words.""",
+            ),
+            (
+                "human",
+                """Project Description: {project_description}
+
+Code Context:
+{context}
+
+Evaluation Task:
+{question}
+
+Detailed Assessment:""",
+            ),
+        ]
+    )
+
+    chain = prompt | llm | StrOutputParser()
+    try:
+        response = chain.invoke({
+            "context": context[:6000],
+            "question": question,
+            "project_description": project_description or "No description provided"
+        })
+        return response
+    except Exception as e:
+        return f"Analysis error: {str(e)}"
+
+
+def assess_innovation(llm, project_description: str, hackathon_name: str = "") -> str:
+    """Assess project innovation based on description (NOT code)"""
+    if not project_description or len(project_description.strip()) < 20:
+        return "Unable to assess innovation: insufficient project description."
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """You are a hackathon judge evaluating project innovation.
+Assess how innovative, creative, and unique this project is.
+Consider: novelty of the idea, originality, problem-solving approach, and potential impact.
+
+Rate from 0-10 and explain your reasoning in 2-3 sentences.
+Format: "Score: X/10 - <reasoning>"
+
+Do NOT analyze code. Focus on the project idea and its innovative potential.""",
+            ),
+            (
+                "human",
+                """Hackathon: {hackathon_name}
+
+Project Description:
+{project_description}
+
+How innovative is this project?""",
+            ),
+        ]
+    )
+
+    chain = prompt | llm | StrOutputParser()
+    try:
+        response = chain.invoke({
+            "project_description": project_description[:2000],
+            "hackathon_name": hackathon_name or "Unknown Hackathon"
+        })
+        return response
+    except Exception as e:
+        return f"Innovation assessment error: {str(e)}"
 
 
 def analyze_repository(repo_url: str, questions: list[str]) -> tuple[list[dict], int]:
@@ -420,15 +500,27 @@ async def invoke_code_agent(repolink: str, project_id: str, hackathon_id: int = 
     """Background task for automatic code analysis via GitHub API"""
     try:
         criteria_text = ""
+        project_description = ""
+        hackathon_name = ""
+
+        # Fetch project and hackathon details
+        conn = get_database_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        cur.execute("SELECT short_description, long_description, hackathon_id FROM projects WHERE project_id = %s", (project_id,))
+        project = cur.fetchone()
+        if project:
+            project_description = f"{project.get('short_description', '')} {project.get('long_description', '')}".strip()
+
         if hackathon_id:
-            conn = get_database_connection()
-            cur = conn.cursor(cursor_factory=RealDictCursor)
-            cur.execute("SELECT criteria FROM hackathons WHERE id = %s", (hackathon_id,))
+            cur.execute("SELECT criteria, name FROM hackathons WHERE id = %s", (hackathon_id,))
             hackathon = cur.fetchone()
             if hackathon:
                 criteria_text = hackathon.get("criteria") or ""
-            cur.close()
-            conn.close()
+                hackathon_name = hackathon.get("name", "")
+
+        cur.close()
+        conn.close()
 
         if not repolink or not repolink.startswith("http"):
             print(f"Invalid repo URL: {repolink}")
@@ -457,7 +549,7 @@ async def invoke_code_agent(repolink: str, project_id: str, hackathon_id: int = 
                 metadata={"source": f["path"]},
             ))
 
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=300)
         chunks = text_splitter.split_documents(documents)
 
         embeddings = get_embeddings()
@@ -469,28 +561,45 @@ async def invoke_code_agent(repolink: str, project_id: str, hackathon_id: int = 
 
         llm = get_llm()
 
-        default_questions = {
-            "Code Quality": "How is the code quality? Rate 0-10.",
-            "Tech Stack": "What technologies and frameworks are used?",
-            "Innovation": "How innovative is this project? Rate 0-10.",
-        }
-
         criteria_list = [c.strip() for c in criteria_text.split(',') if c.strip()]
         if not criteria_list:
             criteria_list = ["Code Quality", "Tech Stack", "Innovation"]
 
         results = []
         for name in criteria_list:
-            question = default_questions.get(name, f"Evaluate {name}. Rate 0-10.")
-            answer = query_codebase(vectorstore, question, llm)
+            answer = ""
+            score = 0.5
 
-            if "Rate 0-10" in question:
+            # Innovation should be assessed from project description, NOT code
+            if name.lower() == "innovation":
+                answer = assess_innovation(llm, project_description, hackathon_name)
                 score = extract_score_from_text(answer)
-            else:
+
+            # Tech Stack - analyze from codebase
+            elif name.lower() == "tech stack" or "tech" in name.lower():
+                answer = query_codebase(vectorstore,
+                    "What technologies, frameworks, libraries, and programming languages are used in this project? List all dependencies, frameworks, and tools found in the code.",
+                    llm)
                 score = 1.0 if answer and answer != "No code found to analyze" else 0.5
 
+            # Code Quality and other criteria - analyze from codebase with criteria context
+            else:
+                criteria_context = f"the hackathon criteria: {name}"
+                answer = query_codebase_detailed(
+                    vectorstore,
+                    llm,
+                    f"""Evaluate the project's {name} based on these aspects:
+1. Does the code follow best practices for {name}?
+2. Are there any specific issues or violations related to {name}?
+
+Context: This project is part of the "{hackathon_name}" hackathon. Assess whether the code meets expectations for {name}.
+If the project does not follow good practices for {name}, specify exactly what is missing or poorly implemented.""",
+                    project_description
+                )
+                score = extract_score_from_text(answer)
+
             save_evaluation(project_id, name, score, answer, "code")
-            results.append({"name": name, "score": score, "answer": answer[:200] if answer else ""})
+            results.append({"name": name, "score": score, "answer": answer[:500] if answer else ""})
 
         conn = get_database_connection()
         cur = conn.cursor()
@@ -508,11 +617,9 @@ async def invoke_code_agent(repolink: str, project_id: str, hackathon_id: int = 
         print(f"Code Agent Error: {str(e)}")
         import traceback
         traceback.print_exc()
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        print(f"Code Agent: Analysis complete for project {project_id}")
-
-    except Exception as e:
-        print(f"Code Agent Error: {str(e)}")
+        # Ensure DB connections are closed on error
+        try:
+            cur.close()
+            conn.close()
+        except:
+            pass
