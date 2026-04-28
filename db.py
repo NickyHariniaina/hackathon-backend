@@ -17,7 +17,7 @@ def init_db():
     cur = conn.cursor()
 
     cur.execute("""
-        CREATE IF NOT EXISTS TABLE hackathons (
+        CREATE TABLE IF NOT EXISTS hackathons (
             id SERIAL PRIMARY KEY,
             name VARCHAR(255) NOT NULL,
             description TEXT DEFAULT '',
@@ -30,7 +30,7 @@ def init_db():
     """)
     
     cur.execute("""
-        CREATE IF NOT EXISTS  TABLE projects (
+        CREATE TABLE IF NOT EXISTS projects (
             id SERIAL PRIMARY KEY,
             project_id VARCHAR(255) UNIQUE NOT NULL,
             hackathon_id INTEGER REFERENCES hackathons(id) ON DELETE SET NULL,
@@ -46,7 +46,7 @@ def init_db():
     """)
     
     cur.execute("""
-        CREATE IF NOT EXISTS TABLE evaluations (
+        CREATE TABLE IF NOT EXISTS evaluations (
             id SERIAL PRIMARY KEY,
             project_id VARCHAR(255) REFERENCES projects(project_id) ON DELETE CASCADE,
             criteria_name VARCHAR(255) NOT NULL,
