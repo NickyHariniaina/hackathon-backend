@@ -134,8 +134,11 @@ def get_file_content(owner, repo, path, branch="main"):
     return data.get("content", "")
 
 
-def fetch_repo_contents(owner, repo, branch="main"):
+def fetch_repo_contents(owner, repo, branch=None):
     """Fetch all code files from repository"""
+    if branch is None:
+        branch = get_default_branch(owner, repo)
+    
     tree = get_repo_tree(owner, repo, branch)
     code_extensions = {
         ".py",
@@ -413,13 +416,29 @@ async def code_agent_analyze(request: Request):
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 
-# Background task function
-async def invoke_code_agent(repolink: str, project_id: str):
-    """Background task for automatic code analysis"""
+async def invoke_code_agent(repolink: str, project_id: str, hackathon_id: int = None):
+    """Background task for automatic code analysis via GitHub API"""
     try:
+        criteria_text = ""
+        if hackathon_id:
+            conn = get_database_connection()
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("SELECT criteria FROM hackathons WHERE id = %s", (hackathon_id,))
+            hackathon = cur.fetchone()
+            if hackathon:
+                criteria_text = hackathon.get("criteria") or ""
+            cur.close()
+            conn.close()
+
+        if not repolink or not repolink.startswith("http"):
+            print(f"Invalid repo URL: {repolink}")
+            save_evaluation(project_id, "Repo Validation", 0, "Invalid GitHub URL", "code")
+            return
+
         owner, repo_name = parse_repo_url(repolink)
         if not owner or not repo_name:
-            print(f"Code Agent Error: Invalid repo URL {repolink}")
+            print(f"Invalid repo URL format: {repolink}")
+            save_evaluation(project_id, "Repo Validation", 0, "Invalid repository URL format", "code")
             return
 
         print(f"Fetching {owner}/{repo_name} via GitHub API")
@@ -427,50 +446,51 @@ async def invoke_code_agent(repolink: str, project_id: str):
         print(f"Fetched {len(files)} files")
 
         if not files:
-            print("No files found")
+            save_evaluation(project_id, "Code Quality", 0, "No code files found in repository", "code")
             return
 
         documents = []
         for f in files:
             from langchain_core.documents import Document
+            documents.append(Document(
+                page_content=f"File: {f['path']}\n\n{f['content']}",
+                metadata={"source": f["path"]},
+            ))
 
-            documents.append(
-                Document(
-                    page_content=f"File: {f['path']}\n\n{f['content']}",
-                    metadata={"source": f["path"]},
-                )
-            )
-
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000, chunk_overlap=200
-        )
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
         chunks = text_splitter.split_documents(documents)
 
         embeddings = get_embeddings()
         vectorstore = Chroma.from_documents(
-            documents=chunks, embedding=embeddings, collection_name=f"repo_{project_id}"
+            documents=chunks,
+            embedding=embeddings,
+            collection_name=f"repo_{project_id}"
         )
 
-        conn = get_database_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT technologies FROM hackathons LIMIT 1")
-        hackathon = cur.fetchone()
-        technologies = hackathon["technologies"] if hackathon else ""
-        cur.close()
-        conn.close()
-
         llm = get_llm()
-        questions = [
-            "What technologies and programming language are used?",
-            "Explain the project in brief",
-            "How is the code quality?",
-            f"Does it use these required technologies: {technologies}?",
-        ]
+
+        default_questions = {
+            "Code Quality": "How is the code quality? Rate 0-10.",
+            "Tech Stack": "What technologies and frameworks are used?",
+            "Innovation": "How innovative is this project? Rate 0-10.",
+        }
+
+        criteria_list = [c.strip() for c in criteria_text.split(',') if c.strip()]
+        if not criteria_list:
+            criteria_list = ["Code Quality", "Tech Stack", "Innovation"]
 
         results = []
-        for question in questions:
+        for name in criteria_list:
+            question = default_questions.get(name, f"Evaluate {name}. Rate 0-10.")
             answer = query_codebase(vectorstore, question, llm)
-            results.append({"question": question, "answer": answer})
+
+            if "Rate 0-10" in question:
+                score = extract_score_from_text(answer)
+            else:
+                score = 1.0 if answer and answer != "No code found to analyze" else 0.5
+
+            save_evaluation(project_id, name, score, answer, "code")
+            results.append({"name": name, "score": score, "answer": answer[:200] if answer else ""})
 
         conn = get_database_connection()
         cur = conn.cursor()
@@ -478,6 +498,16 @@ async def invoke_code_agent(repolink: str, project_id: str):
             "UPDATE projects SET code_agent_analysis = %s WHERE project_id = %s",
             (json.dumps(results), project_id),
         )
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        print(f"Code Agent: Analysis complete for project {project_id}")
+
+    except Exception as e:
+        print(f"Code Agent Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         conn.commit()
         cur.close()
         conn.close()
