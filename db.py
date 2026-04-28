@@ -6,7 +6,7 @@ def get_database_connection():
     conn = psycopg2.connect(
         host="localhost",
         port=5432,
-        database="judgy",
+        database=os.getenv("DB_NAME", "evalio"),
         user=os.getenv("DB_USER", "postgres"),
         password=os.getenv("DB_PASSWORD", "postgres")
     )
