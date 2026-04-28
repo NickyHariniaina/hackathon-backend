@@ -110,7 +110,7 @@ async def invoke_chat_agent(request: Request):
         conn = get_database_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        cur.execute("SELECT technologies, theme, is_allowed FROM hackathons LIMIT 1")
+        cur.execute("SELECT criteria, theme, is_allowed FROM hackathons LIMIT 1")
         hackathon = cur.fetchone()
         
         if not hackathon or not hackathon.get("is_allowed", False):
@@ -121,12 +121,14 @@ async def invoke_chat_agent(request: Request):
                 "chathistory": data.get("chathistory", [])
             }
         
-        technologies = hackathon.get("technologies", "")
         theme = hackathon.get("theme", "")
         
         # Get project if project_id provided
         project_context = ""
+        hackathon_criteria = ""
         project_description = ""
+        if hackathon:
+            hackathon_criteria = hackathon.get("criteria", "")
         
         if "project_id" in data and data["project_id"]:
             cur.execute("SELECT * FROM projects WHERE project_id = %s", (data["project_id"],))
@@ -134,35 +136,7 @@ async def invoke_chat_agent(request: Request):
             
             if project:
                 project_description = project.get("short_description", "")
-                
-                # Try to load project source code
-                DIRECTORY = f"projects_source_code/{data['project_id']}"
-                if os.path.exists(DIRECTORY):
-                    try:
-                        loader = DirectoryLoader(DIRECTORY, silent_errors=True)
-                        documents = loader.load()
-                        
-                        if documents:
-                            text_splitter = RecursiveCharacterTextSplitter(
-                                chunk_size=1000,
-                                chunk_overlap=200
-                            )
-                            chunks = text_splitter.split_documents(documents)
-                            
-                            embeddings = get_embeddings()
-                            vectorstore = Chroma.from_documents(
-                                documents=chunks,
-                                embedding=embeddings,
-                                collection_name=f"chat_{data['project_id']}"
-                            )
-                            
-                            project_context = get_relevant_context(
-                                vectorstore, 
-                                data.get("question", ""), 
-                                k=3
-                            )
-                    except Exception as e:
-                        print(f"Error loading project files: {e}")
+                project_context = project.get("code_agent_analysis", [])
         
         cur.close()
         conn.close()
@@ -182,7 +156,7 @@ async def invoke_chat_agent(request: Request):
 
 Project: {description}
 Theme: {theme}
-Required Tech: {technologies}
+Criteria: {hackathon_criteria}
 
 Code Context: {code_context}
 
@@ -201,7 +175,7 @@ Rules:
         answer = chain.invoke({
             "description": project_description,
             "theme": theme,
-            "technologies": technologies,
+            "hackathon_criteria": hackathon_criteria,
             "code_context": project_context[:1500] if project_context else "No code context available",
             "history": history_context if history_context else "No previous conversation",
             "question": data.get("question", "")
