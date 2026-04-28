@@ -207,7 +207,7 @@ async def get_hackathon_projects(hackathon_id: int):
 async def get_project_score(project_id: str):
     """Get total score and evaluation details for a project.
     
-    Returns average of all criterion scores plus individual scores."""
+    Returns average of all criterion scores."""
     conn = get_database_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     

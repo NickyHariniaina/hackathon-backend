@@ -15,13 +15,9 @@ def get_database_connection():
 def init_db():
     conn = get_database_connection()
     cur = conn.cursor()
-    
-    cur.execute("DROP TABLE IF EXISTS evaluations CASCADE")
-    cur.execute("DROP TABLE IF EXISTS projects CASCADE")
-    cur.execute("DROP TABLE IF EXISTS hackathons CASCADE")
-    
+
     cur.execute("""
-        CREATE TABLE hackathons (
+        CREATE IF NOT EXISTS TABLE hackathons (
             id SERIAL PRIMARY KEY,
             name VARCHAR(255) NOT NULL,
             description TEXT DEFAULT '',
@@ -34,7 +30,7 @@ def init_db():
     """)
     
     cur.execute("""
-        CREATE TABLE projects (
+        CREATE IF NOT EXISTS  TABLE projects (
             id SERIAL PRIMARY KEY,
             project_id VARCHAR(255) UNIQUE NOT NULL,
             hackathon_id INTEGER REFERENCES hackathons(id) ON DELETE SET NULL,
@@ -50,7 +46,7 @@ def init_db():
     """)
     
     cur.execute("""
-        CREATE TABLE evaluations (
+        CREATE IF NOT EXISTS TABLE evaluations (
             id SERIAL PRIMARY KEY,
             project_id VARCHAR(255) REFERENCES projects(project_id) ON DELETE CASCADE,
             criteria_name VARCHAR(255) NOT NULL,
