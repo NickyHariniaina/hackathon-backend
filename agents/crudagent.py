@@ -20,6 +20,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+BASE_PROMPT = os.getenv("BASE_PROMPT", "").strip()
+
 router = APIRouter()
 
 
@@ -67,11 +69,7 @@ def generate_overall_score(
         else "No market analysis available"
     )
 
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are a hackathon judge evaluating projects.
+    system_prompt = """You are a hackathon judge evaluating projects.
 Rate the project from 0-10 based on ALL these factors:
 1. Theme alignment - Does it fit the hackathon theme?
 2. Code quality - From the code analysis
@@ -81,7 +79,15 @@ Rate the project from 0-10 based on ALL these factors:
 Return JSON format:
 {{"score": <0-10>, "reasons": ["reason1", "reason2", "reason3"]}}
 
-Keep reasons short (5-10 words each). Max 3 reasons.""",
+Keep reasons short (5-10 words each). Max 3 reasons."""
+    if BASE_PROMPT:
+        system_prompt = BASE_PROMPT + "\n\n" + system_prompt
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                system_prompt,
             ),
             (
                 "human",
@@ -633,19 +639,23 @@ async def search_projects(request: Request):
         # If no results from semantic search, use LLM to rank projects
         if not results:
             llm = get_llm()
+            system_prompt = """You are a project search engine. Rank the following projects by relevance to the query.
+                Return only the project IDs in order of relevance, separated by commas. Example: "id1,id2,id3"
+
+                Projects:
+                {projects}
+
+                Query: {query}
+
+                Relevant project IDs (in order):"""
+            if BASE_PROMPT:
+                system_prompt = BASE_PROMPT + "\n\n" + system_prompt
+
             prompt = ChatPromptTemplate.from_messages(
                 [
                     (
                         "system",
-                        """You are a project search engine. Rank the following projects by relevance to the query.
-                Return only the project IDs in order of relevance, separated by commas. Example: "id1,id2,id3"
-                
-                Projects:
-                {projects}
-                
-                Query: {query}
-                
-                Relevant project IDs (in order):""",
+                        system_prompt,
                     ),
                 ]
             )

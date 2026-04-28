@@ -164,6 +164,8 @@ def get_github_session():
 
 load_dotenv()
 
+BASE_PROMPT = os.getenv("BASE_PROMPT", "").strip()
+
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 
 router = APIRouter()
@@ -416,13 +418,17 @@ def query_codebase(vectorstore, question, llm):
 
     context = "\n\n".join([doc.page_content for doc in relevant_docs])
 
+    system_prompt = """You are a code reviewer analyzing a hackathon project.
+Answer based on the code provided. Be concise - one paragraph, max 70 words.
+If you can't determine something, say so honestly."""
+    if BASE_PROMPT:
+        system_prompt = BASE_PROMPT + "\n\n" + system_prompt
+
     prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
-                """You are a code reviewer analyzing a hackathon project.
-Answer based on the code provided. Be concise - one paragraph, max 70 words.
-If you can't determine something, say so honestly.""",
+                system_prompt,
             ),
             (
                 "human",
@@ -461,18 +467,22 @@ def query_codebase_detailed(vectorstore, llm, question, project_description=""):
 
     context = "\n\n".join([doc.page_content for doc in relevant_docs])
 
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are a senior software engineer evaluating a hackathon project.
+    system_prompt = """You are a senior software engineer evaluating a hackathon project.
 Analyze the actual code provided below. Do NOT just summarize package.json or dependency files.
 Base your evaluation on the source code structure, patterns, and implementation quality.
 
 If evaluating code quality: look for readability, modularity, error handling, naming conventions, and best practices.
 If a specific criterion is requested: explicitly state whether the project meets it or not, and why.
 
-Be specific and provide concrete observations from the code. Max 200 words.""",
+Be specific and provide concrete observations from the code. Max 200 words."""
+    if BASE_PROMPT:
+        system_prompt = BASE_PROMPT + "\n\n" + system_prompt
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                system_prompt,
             ),
             (
                 "human",
@@ -508,18 +518,22 @@ def assess_innovation(llm, project_description: str, hackathon_name: str = "") -
     if not project_description or len(project_description.strip()) < 20:
         return "Unable to assess innovation: insufficient project description."
 
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are a hackathon judge evaluating project innovation.
+    system_prompt = """You are a hackathon judge evaluating project innovation.
 Assess how innovative, creative, and unique this project is.
 Consider: novelty of the idea, originality, problem-solving approach, and potential impact.
 
 Rate from 0-10 and explain your reasoning in 2-3 sentences.
 Format: "Score: X/10 - <reasoning>"
 
-Do NOT analyze code. Focus on the project idea and its innovative potential.""",
+Do NOT analyze code. Focus on the project idea and its innovative potential."""
+    if BASE_PROMPT:
+        system_prompt = BASE_PROMPT + "\n\n" + system_prompt
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                system_prompt,
             ),
             (
                 "human",
