@@ -17,7 +17,7 @@ def init_db():
     cur = conn.cursor()
 
     cur.execute("""
-        CREATE IF NOT EXISTS TABLE hackathons (
+        CREATE TABLE IF NOT EXISTS hackathons (
             id SERIAL PRIMARY KEY,
             name VARCHAR(255) NOT NULL,
             description TEXT DEFAULT '',
@@ -30,7 +30,7 @@ def init_db():
     """)
     
     cur.execute("""
-        CREATE IF NOT EXISTS  TABLE projects (
+        CREATE TABLE IF NOT EXISTS projects (
             id SERIAL PRIMARY KEY,
             project_id VARCHAR(255) UNIQUE NOT NULL,
             hackathon_id INTEGER REFERENCES hackathons(id) ON DELETE SET NULL,
@@ -39,27 +39,26 @@ def init_db():
             github_link TEXT DEFAULT '',
             theme TEXT DEFAULT '',
             is_reviewed BOOLEAN DEFAULT FALSE,
-            code_agent_analysis JSONB DEFAULT '[]'::jsonb,
-            market_agent_analysis JSONB DEFAULT '[]'::jsonb,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     
     cur.execute("""
-        CREATE IF NOT EXISTS TABLE evaluations (
+        CREATE TABLE IF NOT EXISTS evaluations (
             id SERIAL PRIMARY KEY,
             project_id VARCHAR(255) REFERENCES projects(project_id) ON DELETE CASCADE,
-            criteria_name VARCHAR(255) NOT NULL,
-            score DECIMAL(3,2) DEFAULT 0.00,
-            remarks TEXT DEFAULT '',
-            agent_type VARCHAR(50) DEFAULT 'code',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            agent_type VARCHAR(20) NOT NULL,
+            score DECIMAL(5,2) DEFAULT 0,
+            result_json JSONB DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(project_id, agent_type)
         )
     """)
     
     cur.execute("CREATE INDEX IF NOT EXISTS idx_projects_hackathon_id ON projects(hackathon_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_projects_project_id ON projects(project_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_evaluations_project_id ON evaluations(project_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_evaluations_agent ON evaluations(project_id, agent_type)")
     
     conn.commit()
     cur.close()

@@ -12,7 +12,6 @@ from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-import numpy as np
 import os
 from psycopg2.extras import RealDictCursor
 import uuid
@@ -36,17 +35,12 @@ def get_embeddings():
     )
 
 def semantic_search(query, documents, k=10):
-    """Search documents using embeddings similarity"""
     if not documents:
         return []
     
     embeddings = get_embeddings()
     
-    # Create temporary vectorstore for search
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
-    )
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     
     docs = []
     for doc in documents:
@@ -68,16 +62,46 @@ def semantic_search(query, documents, k=10):
     
     return [doc.page_content for doc in results]
 
+def calculate_total_score(project_id: str) -> dict:
+    """Calculate weighted total score: 60% code + 40% market"""
+    conn = get_database_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cur.execute("SELECT agent_type, score, result_json FROM evaluations WHERE project_id = %s", (project_id,))
+    evaluations = cur.fetchall()
+    cur.close()
+    conn.close()
+    
+    code_score = 0
+    market_score = 0
+    code_result = None
+    market_result = None
+    
+    for eval in evaluations:
+        if eval["agent_type"] == "code":
+            code_score = float(eval["score"]) if eval["score"] else 0
+            code_result = eval["result_json"]
+        elif eval["agent_type"] == "market":
+            market_score = float(eval["score"]) if eval["score"] else 0
+            market_result = eval["result_json"]
+    
+    total_score = (code_score * 0.6) + (market_score * 0.4)
+    
+    return {
+        "code_score": code_score,
+        "market_score": market_score,
+        "total_score": round(total_score, 2),
+        "code_result": code_result,
+        "market_result": market_result
+    }
+
 @router.get("/crud-agent")
 def crudAgent_endpoint():
-    return {"message": "Hello from Crud Agent, Okay I'm not really an agent"}
+    return {"message": "Crud Agent is running"}
 
 @router.post("/create-project", tags=["Projects"], summary="Create project and trigger AI analysis")
 async def create_project(request: Request):
-    """Create a new project. Triggers code and market analysis asynchronously.
-    
-    Body fields: shortDescription, longDescription, githubLink, theme, hackathonId (optional)
-    """
+    """Create a new project. Triggers code and market analysis asynchronously."""
     data = await request.json()
     print(data)
     
@@ -87,48 +111,31 @@ async def create_project(request: Request):
     conn = get_database_connection()
     cur = conn.cursor()
     cur.execute(
-        """
-        INSERT INTO projects (project_id, hackathon_id, short_description, long_description, github_link, theme, is_reviewed)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """,
-        (project_id, hackathon_id, data.get("shortDescription", ""), data.get("longDescription", ""), 
+        """INSERT INTO projects (project_id, hackathon_id, short_description, long_description, github_link, theme, is_reviewed)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+        (project_id, hackathon_id, data.get("shortDescription", ""), data.get("longDescription", ""),
          data.get("githubLink", ""), data.get("theme", ""), False)
     )
     conn.commit()
     cur.close()
     conn.close()
-
-    if hackathon_id:
-        asyncio.create_task(invoke_market_agent(project_id, data.get("shortDescription", ""), hackathon_id))
-        asyncio.create_task(invoke_code_agent(data.get("githubLink", ""), project_id, hackathon_id))
-    else:
-        asyncio.create_task(invoke_market_agent(project_id, data.get("shortDescription", ""), None))
-        asyncio.create_task(invoke_code_agent(data.get("githubLink", ""), project_id, None))
+    
+    asyncio.create_task(invoke_market_agent(project_id, data.get("shortDescription", ""), hackathon_id))
+    asyncio.create_task(invoke_code_agent(data.get("githubLink", ""), project_id, hackathon_id))
     
     return {"message": "Project created", "project_id": project_id}
 
 @router.post("/create-hackathon", tags=["Hackathons"], summary="Create a new hackathon")
 async def create_hackathon(request: Request):
-    """Create a new hackathon with evaluation criteria.
-    
-    Body fields:
-    - name: Hackathon name
-    - description: Description
-    - theme: Theme (optional)
-    - is_allowed: Whether submissions are allowed
-    - criteria: Comma-separated criteria (e.g., "Code Quality, Innovation")
-    - deadline: Deadline timestamp (optional)
-    """
+    """Create a new hackathon with evaluation criteria."""
     data = await request.json()
     
     conn = get_database_connection()
     cur = conn.cursor()
     cur.execute(
-        """
-        INSERT INTO hackathons (name, description, theme, is_allowed, criteria, deadline)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        RETURNING id
-        """,
+        """INSERT INTO hackathons (name, description, theme, is_allowed, criteria, deadline)
+           VALUES (%s, %s, %s, %s, %s, %s)
+           RETURNING id""",
         (data.get("name", ""), data.get("description", ""), data.get("theme", ""),
          data.get("isAllowed", False), data.get("criteria", ""), data.get("deadline", None))
     )
@@ -136,13 +143,11 @@ async def create_hackathon(request: Request):
     conn.commit()
     cur.close()
     conn.close()
-
+    
     return {"message": "Hackathon created", "hackathon_id": hackathon_id}
-
 
 @router.get("/get-hackathon/{hackathon_id}", tags=["Hackathons"], summary="Get hackathon details")
 async def get_hackathon(hackathon_id: int):
-    """Get details of a specific hackathon by ID."""
     conn = get_database_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT * FROM hackathons WHERE id = %s", (hackathon_id,))
@@ -160,10 +165,8 @@ async def get_hackathon(hackathon_id: int):
     
     return {"message": "successful", "hackathon": hackathon}
 
-
 @router.get("/get-all-hackathons", tags=["Hackathons"], summary="List all hackathons")
 async def get_all_hackathons():
-    """Get list of all hackathons ordered by creation date."""
     conn = get_database_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT * FROM hackathons ORDER BY created_at DESC")
@@ -185,18 +188,16 @@ async def get_all_hackathons():
 
 @router.get("/get-hackathon-projects/{hackathon_id}", tags=["Projects"], summary="List projects in a hackathon")
 async def get_hackathon_projects(hackathon_id: int):
-    """Get all projects submitted to a specific hackathon."""
     conn = get_database_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT * FROM projects WHERE hackathon_id = %s ORDER BY created_at DESC", (hackathon_id,))
+    cur.execute("SELECT project_id, short_description, long_description, github_link, created_at FROM projects WHERE hackathon_id = %s ORDER BY created_at DESC", (hackathon_id,))
     projects = cur.fetchall()
     cur.close()
     conn.close()
     
     result = []
     for p in projects:
-        p["_id"] = str(p["id"])
-        del p["id"]
+        p["_id"] = p["project_id"]
         if p.get("created_at"):
             p["created_at"] = p["created_at"].isoformat()
         result.append(p)
@@ -205,18 +206,15 @@ async def get_hackathon_projects(hackathon_id: int):
 
 @router.get("/get-project-score/{project_id}", tags=["Scoring"], summary="Get project score")
 async def get_project_score(project_id: str):
-    """Get total score and evaluation details for a project.
-    
-    Returns average of all criterion scores."""
+    """Get total score (60% code + 40% market) and evaluation details."""
     conn = get_database_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
     cur.execute("""
-        SELECT p.*, h.criteria, h.name as hackathon_name 
-        FROM projects p 
-        LEFT JOIN hackathons h ON p.hackathon_id = h.id 
-        WHERE p.project_id = %s
-    """, (project_id,))
+        SELECT p.project_id, p.short_description, p.github_link, h.name as hackathon_name, h.criteria
+        FROM projects p
+        LEFT JOIN hackathons h ON p.hackathon_id = h.id
+        WHERE p.project_id = %s""", (project_id,))
     project = cur.fetchone()
     
     if not project:
@@ -224,32 +222,29 @@ async def get_project_score(project_id: str):
         conn.close()
         return {"message": "error", "error": "Project not found"}
     
-    cur.execute("SELECT criteria_name, score, remarks FROM evaluations WHERE project_id = %s", (project_id,))
-    evaluations = cur.fetchall()
+    scores = calculate_total_score(project_id)
     cur.close()
     conn.close()
-    
-    total_score = sum(float(e["score"]) for e in evaluations) / len(evaluations) if evaluations else 0
-    
-    scores = {}
-    for eval in evaluations:
-        scores[eval["criteria_name"]] = {"score": float(eval["score"]), "remarks": eval["remarks"]}
     
     return {
         "message": "successful",
         "project_id": project_id,
-        "hackathon_name": project.get("hackathon_name"),
-        "total_score": round(total_score, 2),
-        "scores": scores
+        "short_description": project["short_description"],
+        "hackathon_name": project["hackathon_name"],
+        "code_score": scores["code_score"],
+        "market_score": scores["market_score"],
+        "total_score": scores["total_score"],
+        "code_evaluation": scores["code_result"],
+        "market_evaluation": scores["market_result"]
     }
 
 @router.get("/get-hackathon-leaderboard/{hackathon_id}", tags=["Scoring"], summary="Get hackathon leaderboard")
 async def get_hackathon_leaderboard(hackathon_id: int):
-    """Get ranked projects for a hackathon based on their scores."""
+    """Get ranked projects for a hackathon based on weighted total score."""
     conn = get_database_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
-    cur.execute("SELECT criteria, name FROM hackathons WHERE id = %s", (hackathon_id,))
+    cur.execute("SELECT name FROM hackathons WHERE id = %s", (hackathon_id,))
     hackathon = cur.fetchone()
     if not hackathon:
         cur.close()
@@ -261,19 +256,19 @@ async def get_hackathon_leaderboard(hackathon_id: int):
     
     ranked = []
     for proj in projects:
-        cur.execute("SELECT criteria_name, score FROM evaluations WHERE project_id = %s", (proj["project_id"],))
-        evals = cur.fetchall()
-        total_score = sum(float(e["score"]) for e in evals) / len(evals) if evals else 0
+        scores = calculate_total_score(proj["project_id"])
         ranked.append({
             "project_id": proj["project_id"],
             "short_description": proj["short_description"],
             "github_link": proj["github_link"],
-            "score": round(total_score, 2)
+            "code_score": scores["code_score"],
+            "market_score": scores["market_score"],
+            "total_score": scores["total_score"]
         })
     
     cur.close()
     conn.close()
-    ranked.sort(key=lambda x: x["score"], reverse=True)
+    ranked.sort(key=lambda x: x["total_score"], reverse=True)
     
     return {"message": "successful", "hackathon_name": hackathon["name"], "leaderboard": ranked}
 
@@ -289,8 +284,13 @@ async def get_project(project_id: str):
     if project:
         project["_id"] = str(project["id"])
         del project["id"]
-        if "created_at" in project and project["created_at"]:
+        if project.get("created_at"):
             project["created_at"] = project["created_at"].isoformat()
+        
+        scores = calculate_total_score(project_id)
+        project["code_score"] = scores["code_score"]
+        project["market_score"] = scores["market_score"]
+        project["total_score"] = scores["total_score"]
     
     return {"message": "successful", "project": project}
 
@@ -298,20 +298,19 @@ async def get_project(project_id: str):
 async def get_all_projects():
     conn = get_database_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT * FROM projects ORDER BY created_at DESC")
+    cur.execute("SELECT project_id, hackathon_id, short_description, github_link, created_at FROM projects ORDER BY created_at DESC")
     projects = cur.fetchall()
     cur.close()
     conn.close()
     
-    final = []
+    result = []
     for project in projects:
-        project["_id"] = str(project["id"])
-        del project["id"]
-        if "created_at" in project and project["created_at"]:
+        project["_id"] = project["project_id"]
+        if project.get("created_at"):
             project["created_at"] = project["created_at"].isoformat()
-        final.append(project)
+        result.append(project)
     
-    return {"message": "successful", "projects": final}
+    return {"message": "successful", "projects": result}
 
 @router.post("/review")
 async def review_project(request: Request):
@@ -320,10 +319,7 @@ async def review_project(request: Request):
     
     conn = get_database_connection()
     cur = conn.cursor()
-    cur.execute(
-        "UPDATE projects SET is_reviewed = %s WHERE project_id = %s",
-        (data["isReviewed"], project_id)
-    )
+    cur.execute("UPDATE projects SET is_reviewed = %s WHERE project_id = %s", (data.get("isReviewed", False), project_id))
     conn.commit()
     cur.close()
     conn.close()
@@ -340,7 +336,7 @@ async def search_projects(request: Request):
     
     conn = get_database_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT * FROM projects")
+    cur.execute("SELECT project_id, short_description, long_description, github_link, created_at FROM projects")
     projects = cur.fetchall()
     cur.close()
     conn.close()
@@ -348,94 +344,43 @@ async def search_projects(request: Request):
     if not projects:
         return {"message": "successful", "projects": []}
     
-    # Prepare documents for semantic search
     formatted_projects = []
     documents = []
     
     for project in projects:
         project_dict = dict(project)
-        project_dict["_id"] = str(project_dict["id"])
-        del project_dict["id"]
-        if "created_at" in project_dict and project_dict["created_at"]:
-            project_dict["created_at"] = project_dict["created_at"].isoformat()
         formatted_projects.append(project_dict)
-        
-        # Create searchable text for each project
-        search_text = f"""
-        Project Description: {project_dict.get('long_description', '')}
-        Short Description: {project_dict.get('short_description', '')}
-        Theme: {project_dict.get('theme', '')}
-        """
+        search_text = f"Project: {project_dict.get('short_description', '')} {project_dict.get('long_description', '')}"
         documents.append(search_text)
     
     try:
-        # Use semantic search with embeddings
         relevant_docs = semantic_search(query, documents, k=min(10, len(documents)))
         
-        # Find matching projects
         results = []
         seen_ids = set()
         
         for doc in relevant_docs:
             for project in formatted_projects:
-                if project["_id"] not in seen_ids:
-                    search_text = f"""
-                    Project Description: {project.get('long_description', '')}
-                    Short Description: {project.get('short_description', '')}
-                    Theme: {project.get('theme', '')}
-                    """
-                    if doc in search_text or any(word in search_text for word in doc.split()[:5]):
+                pid = project["project_id"]
+                if pid not in seen_ids:
+                    search_text = f"Project: {project.get('short_description', '')} {project.get('long_description', '')}"
+                    if doc in search_text:
+                        project["_id"] = pid
+                        scores = calculate_total_score(pid)
+                        project["total_score"] = scores["total_score"]
                         results.append(project)
-                        seen_ids.add(project["_id"])
-        
-        # If no results from semantic search, use LLM to rank projects
-        if not results:
-            llm = get_llm()
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", """You are a project search engine. Rank the following projects by relevance to the query.
-                Return only the project IDs in order of relevance, separated by commas. Example: "id1,id2,id3"
-                
-                Projects:
-                {projects}
-                
-                Query: {query}
-                
-                Relevant project IDs (in order):"""),
-            ])
-            
-            # Limit to first 10 projects for LLM processing
-            projects_text = "\n".join([
-                f"ID: {p['_id']} - {p.get('short_description', '')[:100]} - {p.get('theme', '')}"
-                for p in formatted_projects[:10]
-            ])
-            
-            chain = prompt | llm | StrOutputParser()
-            response = chain.invoke({
-                "projects": projects_text,
-                "query": query
-            })
-            
-            # Parse LLM response to get project IDs
-            ranked_ids = [id.strip() for id in response.split(",")]
-            
-            for pid in ranked_ids:
-                for project in formatted_projects:
-                    if project["_id"] == pid:
-                        results.append(project)
-                        break
+                        seen_ids.add(pid)
         
         return {"message": "successful", "projects": results}
     
     except Exception as e:
-        # Fallback to simple text matching if semantic search fails
         print(f"Search error: {e}")
         results = []
         query_lower = query.lower()
         
         for project in formatted_projects:
-            if (query_lower in project.get('short_description', '').lower() or
-                query_lower in project.get('long_description', '').lower() or
-                query_lower in project.get('theme', '').lower()):
+            if query_lower in project.get('short_description', '').lower() or query_lower in project.get('long_description', '').lower():
+                project["_id"] = project["project_id"]
                 results.append(project)
         
         return {"message": "successful", "projects": results[:10]}
