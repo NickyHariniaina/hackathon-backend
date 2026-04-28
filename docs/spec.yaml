@@ -2,663 +2,48 @@ openapi: 3.0.3
 info:
   title: Judgy - Hackathon Project Analysis API
   description: |
-    AI-powered hackathon project analysis platform that provides:
-    - Automated market research and analysis
-    - Code quality and technology stack analysis
-    - AI judge chat interface for project evaluation
-    - Semantic project search and discovery
+    AI-powered hackathon project evaluation platform.
     
-    ## Authentication
-    Currently no authentication required for local development.
+    ## Scoring System
+    - Code Agent (60%): Analyzes GitHub repository code
+    - Market Agent (40%): Researches market potential via web search
+    - Total Score = (code_score × 0.6) + (market_score × 0.4)
     
-    ## Rate Limiting
-    The platform uses a credit system controlled by the hackathon's `isAllowed` flag.
+    ## Evaluation Response Format
+    Each agent returns JSON:
+    ```json
+    {
+      "score": 0-100,
+      "summary": "...",
+      "strengths": [...],
+      "weaknesses": [...],
+      "criterion_scores": {"Criterion": 75, ...}
+    }
+    ```
     
     ## Background Processing
     Market and Code analysis run asynchronously after project creation.
     Results may take 30-60 seconds to appear.
   version: 1.0.0
-  contact:
-    name: Judgy API Support
-    email: support@judgy.com
-  license:
-    name: MIT
-    url: https://opensource.org/licenses/MIT
 
 servers:
   - url: http://localhost:8000/api
     description: Local development server
-  - url: https://api.judgy.com/v1
-    description: Production server (future)
 
 tags:
-  - name: Health
-    description: Service health and status checks
   - name: Hackathons
-    description: Hackathon management endpoints
+    description: Hackathon management
   - name: Projects
     description: Project submission and management
-  - name: Market Agent
-    description: AI-powered market research and analysis
-  - name: Code Agent
-    description: AI-powered code review and analysis
-  - name: Chat Agent
-    description: AI judge conversational interface
-  - name: Search
-    description: Semantic project search and discovery
-  - name: Review
-    description: Project review and approval workflow
+  - name: Scoring
+    description: Project scoring and leaderboard
 
 paths:
-  /:
-    get:
-      tags:
-        - Health
-      summary: Root health check endpoint
-      description: Returns a simple message to verify the API is running
-      operationId: rootHealthCheck
-      responses:
-        '200':
-          description: API is running
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  Hello:
-                    type: string
-                    example: "World"
-
-  /crud-agent:
-    get:
-      tags:
-        - Projects
-      summary: CRUD agent status
-      description: Returns a simple status message
-      responses:
-        '200':
-          description: Status message
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: "Hello from Crud Agent"
-
-  /market-agent:
-    get:
-      tags:
-        - Market Agent
-      summary: Market agent capabilities and status
-      description: Returns information about the market agent's capabilities and usage instructions
-      operationId: getMarketAgentInfo
-      responses:
-        '200':
-          description: Market agent information
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: "Market Agent is running"
-                  capabilities:
-                    type: array
-                    items:
-                      type: string
-                    example:
-                      - "Market analysis with web research"
-                      - "Target audience identification"
-                      - "Competitor analysis"
-                      - "Theme matching"
-                      - "Revenue potential analysis"
-                  usage:
-                    type: object
-                    properties:
-                      endpoint:
-                        type: string
-                        example: "POST /api/market-agent/analyze"
-                      body:
-                        type: object
-                        properties:
-                          idea:
-                            type: string
-                            example: "Your project idea description"
-                          theme:
-                            type: string
-                            example: "Comma-separated list of themes"
-              example:
-                message: "Market Agent is running"
-                capabilities:
-                  - "Market analysis with web research"
-                  - "Target audience identification"
-                  - "Competitor analysis"
-                  - "Theme matching"
-                  - "Revenue potential analysis"
-                usage:
-                  endpoint: "POST /api/market-agent/analyze"
-                  body:
-                    idea: "Your project idea description"
-                    theme: "Comma-separated list of themes"
-      x-code-samples:
-        - lang: curl
-          source: |
-            curl http://localhost:8000/api/market-agent
-
-  /market-agent/analyze:
-    post:
-      tags:
-        - Market Agent
-      summary: Analyze market potential of an idea
-      description: |
-        Performs comprehensive market analysis including:
-        - Target audience identification
-        - Market size and potential assessment
-        - Competitor analysis
-        - Risk and pitfall identification
-        - Revenue model analysis
-        - Automatic theme matching
-        
-        Uses web search (DuckDuckGo) and AI (OpenRouter) for research.
-      operationId: analyzeMarket
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - idea
-              properties:
-                idea:
-                  type: string
-                  description: Detailed description of the project idea
-                  minLength: 10
-                  maxLength: 1000
-                  example: "AI-powered personal fitness trainer that creates custom workout plans based on user goals, fitness level, and available equipment"
-                theme:
-                  type: string
-                  description: Comma-separated list of available hackathon themes (optional, will use database themes if not provided)
-                  example: "Healthcare, Fitness, AI/ML, Mobile Apps, Web Development"
-            examples:
-              healthcare_app:
-                summary: Healthcare application idea
-                value:
-                  idea: "Mental health tracking app that uses AI to detect mood patterns and provide personalized therapy recommendations"
-                  theme: "Healthcare, AI/ML, Mobile Apps, Wellness"
-              fintech_app:
-                summary: Fintech application idea
-                value:
-                  idea: "Blockchain-based peer-to-peer lending platform for small businesses in developing countries"
-                  theme: "Fintech, Blockchain, Social Impact, Web Development"
-              edtech_app:
-                summary: Education technology idea
-                value:
-                  idea: "AR-powered interactive learning platform for STEM education targeting K-12 students"
-                  theme: "Education, AR/VR, Gaming, Mobile Apps"
-      responses:
-        '200':
-          description: Market analysis completed successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: "Market analysis complete"
-                  idea:
-                    type: string
-                    description: The analyzed idea
-                  matched_theme:
-                    type: string
-                    description: AI-matched theme from the available themes
-                    example: "Healthcare"
-                  analysis:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        question:
-                          type: string
-                          description: Market research question
-                        answer:
-                          type: string
-                          description: AI-generated market analysis answer
-                    example:
-                      - question: "Who is the target audience of this idea?"
-                        answer: "Health-conscious individuals aged 18-45 who seek personalized fitness guidance. The market includes busy professionals, fitness beginners, and home workout enthusiasts. Approximately 45% of millennials and 33% of Gen Z actively use fitness apps, representing a $5.5 billion addressable market."
-                      - question: "What is the market potential and size?"
-                        answer: "The global fitness app market is projected to reach $15.6 billion by 2028, growing at 21.5% CAGR. AI-powered fitness solutions represent the fastest-growing segment at 27% CAGR, driven by increasing demand for personalized training and remote fitness solutions post-pandemic."
-                      - question: "What are the main competitors?"
-                        answer: "Key competitors include Freeletics ($75M revenue), Fitbod ($12M), and GymFit. However, few competitors offer AI-driven real-time form correction. The market gap exists in combining personalized plans with computer vision-based exercise tracking, creating a $2.3B blue ocean opportunity."
-                      - question: "What are the potential pitfalls?"
-                        answer: "Main risks include high user acquisition costs ($3-5 per install), 70% churn rate within 90 days typical in fitness apps, regulatory challenges for health recommendations, and technical complexity of real-time pose estimation. Liability concerns for exercise-related injuries also present legal risks requiring robust disclaimers."
-                      - question: "What is the revenue model potential?"
-                        answer: "Freemium model with $9.99/month premium tier, targeting 5% conversion rate. Additional revenue streams include corporate wellness programs ($50/user/year), certified trainer marketplace (15% commission), and anonymized health data licensing ($2-5/user/year). Projected ARR of $2.4M by Year 2 with 50,000 active users."
-              example:
-                message: "Market analysis complete"
-                idea: "AI-powered personal fitness trainer that creates custom workout plans"
-                matched_theme: "Healthcare"
-                analysis:
-                  - question: "Who is the target audience of this idea?"
-                    answer: "Health-conscious individuals aged 18-45 seeking personalized fitness guidance..."
-                  - question: "What is the market potential and size?"
-                    answer: "The global fitness app market is projected to reach $15.6 billion by 2028..."
-                  - question: "What are the main competitors?"
-                    answer: "Key competitors include Freeletics, Fitbod, and MyFitnessPal..."
-                  - question: "What are the potential pitfalls?"
-                    answer: "Main risks include high user acquisition costs and 70% churn rate..."
-                  - question: "What is the revenue model potential?"
-                    answer: "Freemium model with $9.99/month premium tier, targeting 5% conversion..."
-        '400':
-          description: Invalid request - idea is required
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-              example:
-                detail: "Idea is required"
-        '500':
-          description: Internal server error during analysis
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      x-code-samples:
-        - lang: curl
-          source: |
-            curl -X POST http://localhost:8000/api/market-agent/analyze \
-              -H "Content-Type: application/json" \
-              -d '{
-                "idea": "AI-powered personal fitness trainer app",
-                "theme": "Healthcare, Fitness, AI/ML, Mobile Apps"
-              }'
-        - lang: python
-          source: |
-            import requests
-            
-            response = requests.post(
-                "http://localhost:8000/api/market-agent/analyze",
-                json={
-                    "idea": "AI-powered personal fitness trainer app",
-                    "theme": "Healthcare, Fitness, AI/ML, Mobile Apps"
-                }
-            )
-            print(response.json())
-
-  /code-agent:
-    get:
-      tags:
-        - Code Agent
-      summary: Code agent capabilities and status
-      description: Returns information about the code agent's capabilities and usage instructions
-      operationId: getCodeAgentInfo
-      responses:
-        '200':
-          description: Code agent information
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: "Code Agent is running"
-                  capabilities:
-                    type: array
-                    items:
-                      type: string
-                    example:
-                      - "Clone and analyze GitHub repositories"
-                      - "Technology stack detection"
-                      - "Code quality assessment"
-                      - "Dependency analysis"
-                  usage:
-                    type: object
-                    properties:
-                      endpoint:
-                        type: string
-                        example: "POST /api/code-agent/analyze"
-                      body:
-                        type: object
-                        properties:
-                          repo_url:
-                            type: string
-                            example: "https://github.com/username/repository"
-              example:
-                message: "Code Agent is running"
-                capabilities:
-                  - "Clone and analyze GitHub repositories"
-                  - "Technology stack detection"
-                  - "Code quality assessment"
-                  - "Dependency analysis"
-                usage:
-                  endpoint: "POST /api/code-agent/analyze"
-                  body:
-                    repo_url: "https://github.com/username/repository"
-      x-code-samples:
-        - lang: curl
-          source: |
-            curl http://localhost:8000/api/code-agent
-
-  /code-agent/analyze:
-    post:
-      tags:
-        - Code Agent
-      summary: Analyze a GitHub repository
-      description: |
-        Clones and analyzes a GitHub repository to provide:
-        - Technology stack detection
-        - Code quality assessment
-        - Project structure analysis
-        - Dependency and library usage analysis
-        
-        Repository must be public for analysis to work.
-      operationId: analyzeCode
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - repo_url
-              properties:
-                repo_url:
-                  type: string
-                  format: uri
-                  description: Public GitHub repository URL
-                  pattern: '^https://github\.com/[\w-]+/[\w-]+'
-                  example: "https://github.com/octocat/Hello-World"
-            examples:
-              simple_project:
-                summary: Simple Hello World project
-                value:
-                  repo_url: "https://github.com/octocat/Hello-World"
-              react_app:
-                summary: React application
-                value:
-                  repo_url: "https://github.com/facebook/create-react-app"
-              python_project:
-                summary: Python project
-                value:
-                  repo_url: "https://github.com/psf/requests"
-      responses:
-        '200':
-          description: Code analysis completed successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: "Code analysis complete"
-                  repo_url:
-                    type: string
-                    format: uri
-                    description: The analyzed repository URL
-                  files_analyzed:
-                    type: integer
-                    description: Number of files analyzed
-                    example: 5
-                  analysis:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        question:
-                          type: string
-                        answer:
-                          type: string
-                    example:
-                      - question: "What technologies and programming languages are used?"
-                        answer: "The project uses Python 3.9+ with Flask framework for the backend..."
-                      - question: "Explain the project structure and purpose"
-                        answer: "This is a REST API service with a clean MVC architecture..."
-                      - question: "How is the code quality?"
-                        answer: "Code quality appears good with consistent naming conventions..."
-                      - question: "What dependencies and libraries are used?"
-                        answer: "Key dependencies include Flask, SQLAlchemy, and pytest for testing..."
-              example:
-                message: "Code analysis complete"
-                repo_url: "https://github.com/octocat/Hello-World"
-                files_analyzed: 5
-                analysis:
-                  - question: "What technologies and programming languages are used?"
-                    answer: "The project uses Ruby with a simple script structure..."
-                  - question: "Explain the project structure and purpose"
-                    answer: "This is a basic Hello World repository demonstrating GitHub fundamentals..."
-                  - question: "How is the code quality?"
-                    answer: "Code is simple and clean with proper documentation..."
-                  - question: "What dependencies and libraries are used?"
-                    answer: "Minimal dependencies, primarily using Ruby standard library..."
-        '400':
-          description: Invalid request - repo_url is required
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-              example:
-                detail: "Repository URL is required"
-        '500':
-          description: Analysis failed - repository may be private or invalid
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-              example:
-                detail: "Analysis failed: Repository not found or inaccessible"
-      x-code-samples:
-        - lang: curl
-          source: |
-            curl -X POST http://localhost:8000/api/code-agent/analyze \
-              -H "Content-Type: application/json" \
-              -d '{"repo_url": "https://github.com/octocat/Hello-World"}'
-
-  /chat-agent:
-    get:
-      tags:
-        - Chat Agent
-      summary: Chat agent capabilities and status
-      description: Returns information about the chat agent's capabilities
-      operationId: getChatAgentInfo
-      responses:
-        '200':
-          description: Chat agent information
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                  capabilities:
-                    type: array
-                    items:
-                      type: string
-                  usage:
-                    type: object
-                    properties:
-                      simple_chat:
-                        type: string
-                        example: "POST /api/chat-agent/simple"
-                      project_chat:
-                        type: string
-                        example: "POST /api/chat-agent"
-              example:
-                message: "Chat Agent is running"
-                capabilities:
-                  - "AI-powered hackathon judging"
-                  - "Code-aware conversations"
-                  - "Market-aware responses"
-                  - "Multi-turn conversations with history"
-                usage:
-                  simple_chat: "POST /api/chat-agent/simple"
-                  project_chat: "POST /api/chat-agent"
-    post:
-      tags:
-        - Chat Agent
-      summary: Chat with AI judge about a specific project
-      description: |
-        Engage in a conversation with the AI judge about a submitted project.
-        Supports multi-turn conversations with history tracking.
-        The AI has access to:
-        - Project source code
-        - Market analysis results
-        - Hackathon requirements
-        
-        Provides context-aware responses combining code review and market analysis.
-      operationId: chatWithProject
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - question
-              properties:
-                project_id:
-                  type: string
-                  format: uuid
-                  description: Project ID from project creation (optional for general questions)
-                  example: "550e8400-e29b-41d4-a716-446655440000"
-                question:
-                  type: string
-                  description: Your question about the project
-                  minLength: 1
-                  maxLength: 500
-                  example: "What is the market potential of this project?"
-                chathistory:
-                  type: array
-                  description: Previous conversation history for context
-                  items:
-                    type: object
-                    properties:
-                      input:
-                        type: string
-                        description: Previous user question
-                      output:
-                        type: string
-                        description: Previous AI response
-                  example: []
-            examples:
-              first_question:
-                summary: First question about a project
-                value:
-                  project_id: "550e8400-e29b-41d4-a716-446655440000"
-                  question: "What technologies does this project use?"
-                  chathistory: []
-              follow_up:
-                summary: Follow-up with conversation history
-                value:
-                  project_id: "550e8400-e29b-41d4-a716-446655440000"
-                  question: "How can they improve their code quality?"
-                  chathistory:
-                    - input: "What technologies does this project use?"
-                      output: "The project uses React for the frontend and Node.js for the backend..."
-      responses:
-        '200':
-          description: AI response generated successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  answer:
-                    type: string
-                    description: AI judge's response
-                    example: "Based on the code analysis, this project uses React for the frontend..."
-                  chathistory:
-                    type: array
-                    description: Updated conversation history
-                    items:
-                      type: object
-                      properties:
-                        input:
-                          type: string
-                        output:
-                          type: string
-              example:
-                answer: "Based on the code analysis, this project uses React for the frontend with a Node.js/Express backend. The technology stack is modern and appropriate for a hackathon project. Code quality appears solid with proper component structure and API design patterns."
-                chathistory:
-                  - input: "What technologies does this project use?"
-                    output: "Based on the code analysis, this project uses React for the frontend with a Node.js/Express backend..."
-        '500':
-          description: Chat processing error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      x-code-samples:
-        - lang: curl
-          source: |
-            curl -X POST http://localhost:8000/api/chat-agent \
-              -H "Content-Type: application/json" \
-              -d '{
-                "project_id": "550e8400-e29b-41d4-a716-446655440000",
-                "question": "What is the market potential?",
-                "chathistory": []
-              }'
-
-  /chat-agent/simple:
-    post:
-      tags:
-        - Chat Agent
-      summary: Simple chat without project context
-      description: General chat with the AI judge assistant
-      operationId: simpleChat
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - question
-              properties:
-                question:
-                  type: string
-                  description: General question about hackathons or projects
-                  example: "What makes a good hackathon project?"
-            examples:
-              general_question:
-                summary: General hackathon advice
-                value:
-                  question: "What technologies should I use for a hackathon?"
-      responses:
-        '200':
-          description: AI response generated
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  answer:
-                    type: string
-                  chathistory:
-                    type: array
-                    items:
-                      type: object
-              example:
-                answer: "For hackathons, focus on technologies you know well that can be implemented quickly. Popular choices include React for frontend, Node.js/Python for backend, and Firebase for rapid prototyping..."
-                chathistory:
-                  - input: "What technologies should I use for a hackathon?"
-                    output: "For hackathons, focus on technologies you know well..."
-
   /create-hackathon:
     post:
       tags:
         - Hackathons
-      summary: Create a new hackathon with evaluation criteria
-      description: |
-        Create a hackathon with evaluation criteria.
-        The criteria field is a comma-separated list that the AI will use to evaluate projects.
+      summary: Create a new hackathon
       operationId: createHackathon
       requestBody:
         required: true
@@ -669,41 +54,19 @@ paths:
               properties:
                 name:
                   type: string
-                  description: Hackathon name
                   example: "AI Hackathon 2024"
-                description:
-                  type: string
-                  description: Hackathon description
-                  example: "Build with AI technologies"
                 theme:
                   type: string
-                  description: Theme (optional)
-                  example: "Healthcare"
-                isAllowed:
-                  type: boolean
-                  description: Whether submissions are allowed
-                  default: false
-                  example: true
+                  example: "AI/ML Projects"
                 criteria:
                   type: string
-                  description: Comma-separated evaluation criteria
-                  example: "Code Quality, Innovation, Tech Stack"
-                deadline:
-                  type: string
-                  format: date-time
-                  description: Deadline timestamp (optional)
+                  description: Comma-separated criteria for evaluation
+                  example: "Code Quality, Innovation, Tech Stack, Market Potential"
       responses:
         '200':
           description: Hackathon created
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                  hackathon_id:
-                    type: integer
               example:
                 message: "Hackathon created"
                 hackathon_id: 1
@@ -712,13 +75,8 @@ paths:
     post:
       tags:
         - Projects
-      summary: Submit a new hackathon project
-      description: |
-        Submit a project for analysis. Triggers automated:
-        - Market research analysis (async)
-        - Code quality analysis (async)
-        
-        Results are stored in the database and available within 30-60 seconds.
+      summary: Submit a new project
+      description: Triggers async code and market analysis
       operationId: createProject
       requestBody:
         required: true
@@ -726,518 +84,212 @@ paths:
           application/json:
             schema:
               type: object
-              required:
-                - shortDescription
-                - githubLink
               properties:
                 shortDescription:
                   type: string
-                  description: Brief project description (one-liner)
-                  minLength: 10
-                  maxLength: 200
-                  example: "AI-powered personal fitness trainer app"
+                  example: "My AI Project"
                 longDescription:
                   type: string
-                  description: Detailed project description
-                  maxLength: 2000
-                  example: "A comprehensive fitness application that uses AI to create personalized workout plans based on user goals, fitness level, and available equipment. Includes real-time form correction using computer vision."
                 githubLink:
                   type: string
                   format: uri
-                  description: Public GitHub repository URL
-                  pattern: '^https://github\.com/[\w-]+/[\w-]+'
-                  example: "https://github.com/username/fitness-ai"
-            examples:
-              web_app:
-                summary: Web application project
-                value:
-                  shortDescription: "Real-time collaborative code editor"
-                  longDescription: "A Google Docs-like editor for developers with syntax highlighting, real-time collaboration using WebSockets, and GitHub integration"
-                  githubLink: "https://github.com/username/collab-editor"
-              mobile_app:
-                summary: Mobile application project
-                value:
-                  shortDescription: "Mental health tracking app"
-                  longDescription: "Mobile app that tracks mood, sleep, and anxiety levels with AI-powered insights and therapist connections"
-                  githubLink: "https://github.com/username/mindfulness-app"
+                  example: "https://github.com/user/repo"
+                hackathonId:
+                  type: integer
+                  description: Optional hackathon ID
       responses:
         '200':
-          description: Project created successfully
+          description: Project created
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: "Project created"
-                  project_id:
-                    type: string
-                    format: uuid
-                    description: Unique project identifier for future API calls
-                    example: "550e8400-e29b-41d4-a716-446655440000"
               example:
                 message: "Project created"
-                project_id: "550e8400-e29b-41d4-a716-446655440000"
-        '500':
-          description: Server error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      x-code-samples:
-        - lang: curl
-          source: |
-            curl -X POST http://localhost:8000/api/create-project \
-              -H "Content-Type: application/json" \
-              -d '{
-                "shortDescription": "AI fitness trainer app",
-                "longDescription": "Personalized workout plans using AI",
-                "githubLink": "https://github.com/username/fitness-ai"
-              }'
-
-  /get-all:
-    get:
-      tags:
-        - Projects
-      summary: Get all submitted projects
-      description: Returns all projects ordered by creation date (newest first)
-      operationId: getAllProjects
-      responses:
-        '200':
-          description: List of all projects
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                  projects:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Project'
+                project_id: "uuid-here"
 
   /get-hackathon/{id}:
     get:
       tags:
         - Hackathons
       summary: Get hackathon details
-      description: Get details of a specific hackathon by ID
-      operationId: getHackathon
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: integer
-          example: 1
       responses:
         '200':
           description: Hackathon details
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  hackathon:
-                    type: object
 
   /get-all-hackathons:
     get:
       tags:
         - Hackathons
       summary: List all hackathons
-      description: Get list of all hackathons
-      operationId: getAllHackathons
       responses:
         '200':
           description: List of hackathons
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  hackathons:
-                    type: array
-
-  /get-hackathon-projects/{id}:
-    get:
-      tags:
-        - Projects
-      summary: List projects in a hackathon
-      description: Get all projects submitted to a specific hackathon
-      operationId: getHackathonProjects
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-          example: 1
-      responses:
-        '200':
-          description: List of projects
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  projects:
-                    type: array
-
-  /get-project-score/{project_id}:
-    get:
-      tags:
-        - Scoring
-      summary: Get project score and evaluations
-      description: Get total score and evaluation details for a project
-      operationId: getProjectScore
-      parameters:
-        - name: project_id
-          in: path
-          required: true
-          schema:
-            type: string
-          example: "550e8400-e29b-41d4-a716-446655440000"
-      responses:
-        '200':
-          description: Project scores
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  total_score:
-                    type: number
-                  scores:
-                    type: object
-
-  /get-hackathon-leaderboard/{id}:
-    get:
-      tags:
-        - Scoring
-      summary: Get hackathon leaderboard
-      description: Get ranked projects for a hackathon based on scores
-      operationId: getHackathonLeaderboard
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-          example: 1
-      responses:
-        '200':
-          description: Ranked projects
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  leaderboard:
-                    type: array
-              example:
-                message: "successful"
-                projects:
-                  - _id: "1"
-                    project_id: "550e8400-e29b-41d4-a716-446655440000"
-                    short_description: "AI fitness trainer app"
-                    long_description: "Personalized workout plans using AI..."
-                    github_link: "https://github.com/username/fitness-ai"
-                    theme: "Healthcare"
-                    is_reviewed: false
-                    code_agent_analysis: []
-                    market_agent_analysis: []
-                    created_at: "2024-01-15T10:30:00Z"
-      x-code-samples:
-        - lang: curl
-          source: |
-            curl http://localhost:8000/api/get-all
 
   /get-project/{project_id}:
     get:
       tags:
         - Projects
-      summary: Get a specific project by ID
-      description: Returns detailed project information including analysis results
-      operationId: getProject
+      summary: Get project with scores
       parameters:
         - name: project_id
           in: path
           required: true
-          description: Project UUID from project creation
           schema:
             type: string
-            format: uuid
-          example: "550e8400-e29b-41d4-a716-446655440000"
       responses:
         '200':
-          description: Project details
+          description: Project details with evaluations
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  message:
-                    type: string
-                    example: "successful"
-                  project:
-                    $ref: '#/components/schemas/Project'
-        '404':
-          description: Project not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      x-code-samples:
-        - lang: curl
-          source: |
-            curl http://localhost:8000/api/get-project/550e8400-e29b-41d4-a716-446655440000
-
-  /review:
-    post:
-      tags:
-        - Review
-      summary: Review and approve/reject a project
-      description: Mark a project as reviewed or unreviewed
-      operationId: reviewProject
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - project_id
-                - isReviewed
-              properties:
-                project_id:
-                  type: string
-                  format: uuid
-                  description: Project UUID
-                  example: "550e8400-e29b-41d4-a716-446655440000"
-                isReviewed:
-                  type: boolean
-                  description: Review status
-                  example: true
-            examples:
-              approve:
-                summary: Approve a project
-                value:
-                  project_id: "550e8400-e29b-41d4-a716-446655440000"
-                  isReviewed: true
-              reject:
-                summary: Reject/unreview a project
-                value:
-                  project_id: "550e8400-e29b-41d4-a716-446655440000"
-                  isReviewed: false
-      responses:
-        '200':
-          description: Review status updated
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: "successful"
                   project_id:
                     type: string
-                    format: uuid
+                  short_description:
+                    type: string
+                  code_score:
+                    type: number
+                  market_score:
+                    type: number
+                  total_score:
+                    type: number
+                  code_evaluation:
+                    type: object
+                    description: Full code agent JSON response
+                  market_evaluation:
+                    type: object
+                    description: Full market agent JSON response
+
+  /get-project-score/{project_id}:
+    get:
+      tags:
+        - Scoring
+      summary: Get project score breakdown
+      description: Returns code_score (60%), market_score (40%), and total_score
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Score breakdown
+          content:
+            application/json:
               example:
                 message: "successful"
-                project_id: "550e8400-e29b-41d4-a716-446655440000"
-      x-code-samples:
-        - lang: curl
-          source: |
-            curl -X POST http://localhost:8000/api/review \
-              -H "Content-Type: application/json" \
-              -d '{
-                "project_id": "550e8400-e29b-41d4-a716-446655440000",
-                "isReviewed": true
-              }'
+                project_id: "uuid"
+                code_score: 75
+                market_score: 68
+                total_score: 72.2
+                code_evaluation:
+                  score: 75
+                  summary: "Good code quality"
+                  strengths: ["Clean architecture"]
+                  weaknesses: ["No tests"]
+                market_evaluation:
+                  score: 68
+                  summary: "Strong market potential"
+
+  /get-hackathon-projects/{hackathon_id}:
+    get:
+      tags:
+        - Projects
+      summary: List projects in a hackathon
+      parameters:
+        - name: hackathon_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of projects
+
+  /get-hackathon-leaderboard/{hackathon_id}:
+    get:
+      tags:
+        - Scoring
+      summary: Get hackathon leaderboard
+      description: Ranked projects by total score (60% code + 40% market)
+      parameters:
+        - name: hackathon_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Ranked projects
+          content:
+            application/json:
+              example:
+                message: "successful"
+                leaderboard:
+                  - project_id: "uuid"
+                    short_description: "Project A"
+                    code_score: 80
+                    market_score: 75
+                    total_score: 78
+
+  /get-all:
+    get:
+      tags:
+        - Projects
+      summary: Get all projects
+      responses:
+        '200':
+          description: List of all projects
 
   /search:
     post:
       tags:
         - Search
-      summary: Semantic search for projects
-      description: |
-        Search projects using natural language queries.
-        Uses AI embeddings for semantic understanding, not just keyword matching.
-        
-        Supports searching by:
-        - Project description
-        - Technology stack
-        - Theme
-        - General concepts
-      operationId: searchProjects
+      summary: Semantic search projects
       requestBody:
-        required: true
         content:
           application/json:
             schema:
               type: object
-              required:
-                - query
               properties:
                 query:
                   type: string
-                  description: Natural language search query
-                  minLength: 1
-                  maxLength: 500
-                  example: "AI healthcare applications"
-            examples:
-              by_technology:
-                summary: Search by technology
-                value:
-                  query: "React and Node.js projects"
-              by_theme:
-                summary: Search by theme
-                value:
-                  query: "healthcare and wellness apps"
-              by_concept:
-                summary: Search by concept
-                value:
-                  query: "real-time collaboration tools"
       responses:
         '200':
           description: Search results
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: "successful"
-                  projects:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Project'
-              example:
-                message: "successful"
-                projects:
-                  - _id: "1"
-                    project_id: "550e8400-e29b-41d4-a716-446655440000"
-                    short_description: "AI healthcare diagnostic tool"
-                    theme: "Healthcare"
-      x-code-samples:
-        - lang: curl
-          source: |
-            curl -X POST http://localhost:8000/api/search \
-              -H "Content-Type: application/json" \
-              -d '{"query": "AI healthcare"}'
+
+  /review:
+    post:
+      tags:
+        - Review
+      summary: Mark project as reviewed
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                project_id:
+                  type: string
+                isReviewed:
+                  type: boolean
+      responses:
+        '200':
+          description: Review updated
 
 components:
   schemas:
-    Project:
-      type: object
-      properties:
-        _id:
-          type: string
-          description: Database ID
-          example: "1"
-        project_id:
-          type: string
-          format: uuid
-          description: Unique project identifier
-          example: "550e8400-e29b-41d4-a716-446655440000"
-        short_description:
-          type: string
-          description: Brief project description
-          example: "AI-powered fitness trainer app"
-        long_description:
-          type: string
-          description: Detailed project description
-          example: "A comprehensive fitness application that uses AI..."
-        github_link:
-          type: string
-          format: uri
-          description: GitHub repository URL
-          example: "https://github.com/username/fitness-ai"
-        theme:
-          type: string
-          description: AI-matched hackathon theme
-          example: "Healthcare"
-        is_reviewed:
-          type: boolean
-          description: Whether the project has been reviewed
-          example: false
-        code_agent_analysis:
-          type: array
-          description: Code analysis results (populated after background processing)
-          items:
-            type: object
-            properties:
-              question:
-                type: string
-              answer:
-                type: string
-          example:
-            - question: "What technologies are used?"
-              answer: "The project uses React and Node.js..."
-        market_agent_analysis:
-          type: array
-          description: Market analysis results (populated after background processing)
-          items:
-            type: object
-            properties:
-              question:
-                type: string
-              answer:
-                type: string
-          example:
-            - question: "Who is the target audience?"
-              answer: "Health-conscious individuals aged 18-45..."
-        created_at:
-          type: string
-          format: date-time
-          description: Project submission timestamp
-          example: "2024-01-15T10:30:00Z"
-
     Error:
       type: object
       properties:
-        detail:
+        message:
           type: string
-          description: Error message
-          example: "Error description here"
-      required:
-        - detail
-
-    ChatHistory:
-      type: object
-      properties:
-        input:
+        error:
           type: string
-          description: User's question
-        output:
-          type: string
-          description: AI's response
-
-  securitySchemes: {}
-
-security: []
-
-tags:
-  - name: Health
-    description: Service health checks
-  - name: Hackathons
-    description: Hackathon management
-  - name: Projects
-    description: Project submission and management
-  - name: Scoring
-    description: Project scoring and leaderboard
-  - name: Market Agent
-    description: Market research and analysis
-  - name: Code Agent
-    description: Code review and analysis
-  - name: Chat Agent
-    description: AI judge conversations
-  - name: Search
-    description: Project discovery
-  - name: Review
-    description: Project review workflow
